@@ -48,7 +48,7 @@ export function SelectableChips<T extends string>({
               aria-pressed={active}
               onClick={() => toggle(option.value)}
               className={[
-                'rounded-full border px-3.5 py-2 text-sm font-medium transition-colors',
+                'min-h-11 rounded-full border px-3.5 py-2 text-sm font-medium transition-colors',
                 active
                   ? 'border-crimson bg-crimson text-white'
                   : 'border-line bg-white text-charcoal hover:border-navy/30',

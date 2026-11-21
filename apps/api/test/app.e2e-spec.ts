@@ -249,9 +249,30 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
         ['privacy', { visibility: [{ field: 'RELIGION', visibility: 'HIDDEN' }] }],
       ];
 
+      // A later step cannot be saved before the earlier ones.
+      const skipped = await agent
+        .patch(`${prefix}/onboarding/step`)
+        .send({ step: 'profession', data: steps[2]![1] })
+        .expect(403);
+      expect(skipped.body.error.code).toBe('ONBOARDING_INCOMPLETE');
+
       for (const [step, data] of steps) {
+        // Mandatory fields are enforced on the server for each step.
+        if (step === 'identity') {
+          const invalid = await agent
+            .patch(`${prefix}/onboarding/step`)
+            .send({ step, data: { ...data, displayName: '' } })
+            .expect(400);
+          expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
+        }
         await agent.patch(`${prefix}/onboarding/step`).send({ step, data }).expect(200);
       }
+
+      // Going back to edit an earlier step is allowed and keeps progress.
+      await agent
+        .patch(`${prefix}/onboarding/step`)
+        .send({ step: 'identity', data: { ...steps[1]![1], displayName: 'Test Member' } })
+        .expect(200);
 
       const state = await agent.get(`${prefix}/onboarding/status`).expect(200);
       expect(state.body.canComplete).toBe(true);
@@ -361,6 +382,92 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
     it('keeps the session alive through a refresh rotation', async () => {
       await agent.post(`${prefix}/auth/refresh`).expect(200);
       await agent.get(`${prefix}/auth/me`).expect(200);
+    });
+  });
+
+  describe('session lifetime', () => {
+    const cookieValue = (cookies: string[], name: string) =>
+      cookies
+        .find((cookie) => cookie.startsWith(`${name}=`))
+        ?.split(';')[0]
+        ?.slice(name.length + 1);
+
+    async function signIn() {
+      const otp = await request(httpServer)
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone: newPhone(), countryCode: 'BD' })
+        .expect(200);
+      const verified = await request(httpServer)
+        .post(`${prefix}/auth/verify-otp`)
+        .send({ challengeId: otp.body.challengeId, code: debugCode })
+        .expect(200);
+      const cookies = verified.headers['set-cookie'] as unknown as string[];
+      return { cookies, refresh: cookieValue(cookies, 'kc_rt')!, userId: verified.body.session.user.id as string };
+    }
+
+    it('sets a session marker for the route gate and clears it on logout', async () => {
+      const { cookies, refresh } = await signIn();
+      const marker = cookies.find((cookie) => cookie.startsWith('kc_s=1'));
+      expect(marker).toMatch(/HttpOnly/i);
+      expect(marker).toMatch(/Path=\//);
+
+      const loggedOut = await request(httpServer)
+        .post(`${prefix}/auth/logout`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(200);
+      const cleared = loggedOut.headers['set-cookie'] as unknown as string[];
+      expect(cleared.some((cookie) => cookie.startsWith('kc_s=;'))).toBe(true);
+
+      // The refresh token is revoked: it can no longer extend the session.
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(401);
+    });
+
+    it('treats two simultaneous refreshes (two tabs) as a race, not as theft', async () => {
+      const { refresh, userId } = await signIn();
+      const winner = await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(200);
+      const rotated = cookieValue(winner.headers['set-cookie'] as unknown as string[], 'kc_rt')!;
+
+      // The second tab presents the token rotated a moment ago.
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(401);
+
+      // The winning tab's session survives.
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${rotated}`)
+        .expect(200);
+      const live = await prisma.session.count({ where: { userId, revokedAt: null } });
+      expect(live).toBe(1);
+    });
+
+    it('ends every session when an old refresh token is replayed later', async () => {
+      const { refresh, userId } = await signIn();
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(200);
+
+      // Simulate the replay arriving well after the grace window.
+      const sessionId = refresh.split('.')[0]!;
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: { revokedAt: new Date(Date.now() - 5 * 60_000) },
+      });
+
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(401);
+      const live = await prisma.session.count({ where: { userId, revokedAt: null } });
+      expect(live).toBe(0);
     });
   });
 

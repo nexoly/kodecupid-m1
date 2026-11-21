@@ -23,14 +23,27 @@ export const DEFAULT_AGE_RANGE: { min: number; max: number } = { min: 18, max: 9
 export const DEFAULT_MAX_DISTANCE_KM = 50;
 
 /* Cookies — deliberately short, prefixed names */
+/**
+ * `session` holds no secret: it only tells the web app's route gate that a
+ * refresh token exists (the refresh cookie itself is scoped to the auth path),
+ * so an expired 15-minute access token is refreshed instead of forcing a login.
+ */
 export const MEMBER_COOKIE = {
   access: 'kc_at',
   refresh: 'kc_rt',
+  session: 'kc_s',
 } as const;
 export const ADMIN_COOKIE = {
   access: 'kc_admin_at',
   refresh: 'kc_admin_rt',
+  session: 'kc_admin_s',
 } as const;
+
+/**
+ * Two tabs can refresh at the same moment; the loser presents a token rotated a
+ * moment earlier. Within this window that is treated as a race, not as theft.
+ */
+export const REFRESH_REUSE_GRACE_MS = 30_000;
 
 /* JWT audiences keep member and admin tokens non-interchangeable */
 export const JWT_AUDIENCE = {

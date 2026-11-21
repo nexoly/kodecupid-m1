@@ -91,7 +91,7 @@ export function Alert({
   const tones = {
     info: 'border-navy/15 bg-navy/5 text-navy',
     success: 'border-emerald-600/20 bg-emerald-50 text-emerald-900',
-    warning: 'border-gold/40 bg-gold-soft text-navy',
+    warning: 'border-warn/30 bg-warn-soft text-navy',
     danger: 'border-crimson/30 bg-crimson-soft text-navy',
   } as const;
 
@@ -103,6 +103,7 @@ export function Alert({
   );
 }
 
+/** `gold` is Service Gold: use it only for verification badges (brand rule). */
 type BadgeTone = 'neutral' | 'success' | 'warning' | 'danger' | 'gold' | 'navy';
 
 export function Badge({
@@ -115,7 +116,7 @@ export function Badge({
   const tones: Record<BadgeTone, string> = {
     neutral: 'bg-alabaster text-charcoal border-line',
     success: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-    warning: 'bg-gold-soft text-navy border-gold/40',
+    warning: 'bg-warn-soft text-warn border-warn/30',
     danger: 'bg-crimson-soft text-crimson border-crimson/25',
     gold: 'bg-gold-soft text-navy border-gold/50',
     navy: 'bg-navy text-white border-navy',

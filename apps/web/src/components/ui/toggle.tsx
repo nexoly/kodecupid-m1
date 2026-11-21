@@ -24,6 +24,8 @@ export function Toggle({
       onClick={() => onChange(!checked)}
       className={[
         'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+        // Invisible 44px-tall tap area around the 24px track.
+        "after:absolute after:-inset-x-1 after:-inset-y-2.5 after:content-['']",
         'disabled:cursor-not-allowed disabled:opacity-50',
         checked ? 'bg-crimson' : 'bg-line',
       ].join(' ')}

@@ -91,7 +91,7 @@ export function PhotoManager({
               loading="lazy"
             />
             {photo.isPrimary ? (
-              <span className="absolute left-2 top-2 rounded-full bg-gold px-2 py-0.5 text-[10px] font-semibold uppercase text-navy">
+              <span className="absolute left-2 top-2 rounded-full bg-navy px-2 py-0.5 text-[10px] font-semibold uppercase text-white">
                 Primary
               </span>
             ) : null}

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  REFRESH_REUSE_GRACE_MS,
   countryOf,
   normalizePhone,
   type MemberSession,
@@ -128,6 +129,14 @@ export class AuthService {
     }
 
     if (session!.revokedAt) {
+      // A token rotated seconds ago is a concurrent-refresh race (two tabs):
+      // refuse it, but do not treat it as theft.
+      if (
+        session!.replacedById &&
+        Date.now() - session!.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS
+      ) {
+        this.tokens.invalidSession();
+      }
       // Token reuse after rotation: assume theft and end every session.
       await this.prisma.session.updateMany({
         where: { userId: session!.userId, revokedAt: null },

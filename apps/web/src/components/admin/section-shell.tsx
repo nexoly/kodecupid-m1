@@ -75,7 +75,7 @@ export function AdminSectionShell({ endpoint }: { endpoint: string }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-semibold tracking-tight text-navy">{data.title}</h1>
-        {data.milestone === 2 ? <Badge tone="gold">Milestone 2</Badge> : <Badge tone="success">Live</Badge>}
+        {data.milestone === 2 ? <Badge tone="neutral">Milestone 2</Badge> : <Badge tone="success">Live</Badge>}
       </div>
       <p className="text-sm text-muted">{data.description}</p>
 

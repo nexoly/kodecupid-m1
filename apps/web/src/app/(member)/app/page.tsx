@@ -116,7 +116,7 @@ export default function MemberHomePage() {
               reviewable in the admin area.
             </p>
           </div>
-          <Badge tone="gold">M2</Badge>
+          <Badge tone="neutral">M2</Badge>
         </div>
       </Card>
 

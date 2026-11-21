@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  REFRESH_REUSE_GRACE_MS,
   permissionsFor,
   type AdminSession,
   type AdminSummary,
@@ -122,6 +123,13 @@ export class AdminAuthService {
     if (!session) this.tokens.invalidSession();
 
     if (session!.revokedAt) {
+      // Concurrent refresh from two tabs: refuse quietly, not a theft signal.
+      if (
+        session!.replacedById &&
+        Date.now() - session!.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS
+      ) {
+        this.tokens.invalidSession();
+      }
       await this.prisma.adminSession.updateMany({
         where: { adminId: session!.adminId, revokedAt: null },
         data: { revokedAt: new Date() },

@@ -52,6 +52,7 @@ export default function PrivacyPage() {
   const [savingField, setSavingField] = useState<ProfileField | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pausing, setPausing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,6 +89,28 @@ export default function PrivacyPage() {
     }
   }
 
+  async function setPaused(nextPaused: boolean): Promise<void> {
+    setPausing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await apiFetch<ProfileOwnerView>(
+        nextPaused ? '/profile/pause' : '/profile/resume',
+        { method: 'PATCH' },
+      );
+      setProfile(updated);
+      setNotice(
+        nextPaused
+          ? 'Your profile is paused. Other members cannot see it.'
+          : 'Your profile is visible again.',
+      );
+    } catch (caught) {
+      setError(errorMessage(caught, 'Could not update your profile status.'));
+    } finally {
+      setPausing(false);
+    }
+  }
+
   if (loading) {
     return <LoadingBlock label="Loading privacy settings" rows={4} />;
   }
@@ -110,6 +133,31 @@ export default function PrivacyPage() {
         </p>
       </div>
 
+      <Card>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-navy">
+          Profile visibility
+        </h2>
+        <p className="mt-0.5 text-xs text-muted">
+          Pausing hides your whole profile from other members without deleting anything.
+        </p>
+        <div className="mt-2">
+          <ToggleRow
+            id="pause-profile"
+            checked={profile.status !== 'PAUSED'}
+            disabled={pausing}
+            onChange={(visible) => void setPaused(!visible)}
+            title={profile.status === 'PAUSED' ? 'Profile paused' : 'Profile visible'}
+            description={
+              pausing
+                ? 'Saving…'
+                : profile.status === 'PAUSED'
+                  ? 'Nobody can see your profile. Switch on to resume.'
+                  : 'Members can see the fields you have not hidden.'
+            }
+          />
+        </div>
+      </Card>
+
       <Card className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-navy">
@@ -119,7 +167,7 @@ export default function PrivacyPage() {
             Changes save immediately — there is no separate save button.
           </p>
         </div>
-        <Badge tone={hiddenCount > 0 ? 'warning' : 'success'}>
+        <Badge tone={hiddenCount > 0 ? 'navy' : 'success'}>
           {hiddenCount > 0 ? 'Protected' : 'All visible'}
         </Badge>
       </Card>

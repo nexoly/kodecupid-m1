@@ -14,6 +14,10 @@
   --color-alabaster: #f7f8fa;
   --color-gold: #d99b26;
   --color-gold-soft: #fdf4e3;
+  /* Semantic caution colour, deliberately distinct from Service Gold, which is
+     reserved for verification badges. */
+  --color-warn: #b4410f;
+  --color-warn-soft: #fff1e8;
   --color-charcoal: #2d3748;
   --color-muted: #64748b;
   --color-line: #e2e8f0;

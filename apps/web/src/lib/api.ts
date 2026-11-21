@@ -34,6 +34,49 @@ export interface ApiFetchOptions {
 }
 
 /**
+ * Endpoints that issue or end a session never trigger a refresh-and-retry
+ * (a wrong OTP or password must surface as-is, and refresh must not loop).
+ * `/auth/me` and `/admin/auth/me` are deliberately refreshable.
+ */
+function isAuthEndpoint(path: string): boolean {
+  const authPath = path.startsWith('/admin/auth/') || path.startsWith('/auth/');
+  return authPath && !path.endsWith('/auth/me');
+}
+
+/**
+ * One refresh in flight per audience: concurrent 401s share it, so a page that
+ * fires several requests at once rotates the refresh token exactly once.
+ */
+const refreshing: Partial<Record<'member' | 'admin', Promise<boolean>>> = {};
+
+function refreshSession(audience: 'member' | 'admin'): Promise<boolean> {
+  const existing = refreshing[audience];
+  if (existing) return existing;
+  const endpoint = audience === 'admin' ? '/api/v1/admin/auth/refresh' : '/api/v1/auth/refresh';
+  const attempt = fetch(endpoint, { method: 'POST', credentials: 'same-origin' })
+    .then((response) => response.ok)
+    .catch(() => false)
+    .finally(() => {
+      delete refreshing[audience];
+    });
+  refreshing[audience] = attempt;
+  return attempt;
+}
+
+/**
+ * Sends a request; on 401 it refreshes the 15-minute access token once using
+ * the 30-day refresh cookie and retries, so sessions do not end mid-use.
+ */
+async function sendWithRefresh(path: string, init: RequestInit): Promise<Response> {
+  const response = await fetch(`/api/v1${path}`, init);
+  if (response.status !== 401 || isAuthEndpoint(path)) return response;
+
+  const audience = path.startsWith('/admin/') ? 'admin' : 'member';
+  const refreshed = await refreshSession(audience);
+  return refreshed ? fetch(`/api/v1${path}`, init) : response;
+}
+
+/**
  * Browser client for the proxied API. Cookies are sent automatically because
  * every call is same-origin (`/api/v1/...` is rewritten by Next.js).
  */
@@ -42,7 +85,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 
   let response: Response;
   try {
-    response = await fetch(`/api/v1${path}`, {
+    response = await sendWithRefresh(path, {
       method,
       credentials: 'same-origin',
       signal,
@@ -82,11 +125,16 @@ export async function apiUpload<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append('file', file);
 
-  const response = await fetch(`/api/v1${path}`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    body: form,
-  });
+  let response: Response;
+  try {
+    response = await sendWithRefresh(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: form,
+    });
+  } catch {
+    throw new ApiError('NETWORK_ERROR', 'Could not reach KodeCupid. Check your connection.', 0);
+  }
 
   const text = await response.text();
   const payload = text ? (JSON.parse(text) as unknown) : null;

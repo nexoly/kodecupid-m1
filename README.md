@@ -26,9 +26,9 @@ details, role management, settings and monetization. Compare
 | Check | Command | Status |
 | --- | --- | --- |
 | Static types (3 packages) | `pnpm typecheck` | ✅ |
-| Unit tests: privacy filtering, age gate, permission matrix, onboarding resume | `pnpm test` | ✅ 28 passed |
-| API flows against PostgreSQL + PostGIS (incl. real hashed OTP path, OTP race, staging OTP policy) | `pnpm test:e2e` | ✅ 42 passed |
-| Browser flows at 360px (register → onboarding back/resume → profile edit → API-enforced privacy → pause → re-login → admin roles) | `pnpm test:web` | ✅ 6 passed |
+| Unit tests: privacy filtering, age gate, permission matrix, onboarding resume, phone validation, OTP hashing | `pnpm test` | ✅ 43 passed |
+| API flows against PostgreSQL + PostGIS (incl. real hashed OTP path, OTP race and expiry, staging OTP policy, session refresh, onboarding order) | `pnpm test:e2e` | ✅ 47 passed |
+| Browser flows at 360px (register → onboarding back/resume → profile edit → API-enforced privacy → pause → re-login; admin assigns a role by email → invitee signs in as Moderator → permission checks → revoke; session refresh) | `pnpm test:web` | ✅ 9 passed |
 | Production builds | `pnpm build` | ✅ |
 
 ## Running it right now (local)
