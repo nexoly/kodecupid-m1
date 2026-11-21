@@ -68,6 +68,24 @@ needs the client's account credentials):
 - **Real SMS test**: needs a Twilio account (Account SID, Auth Token, Verify Service SID).
   The Twilio Verify integration is implemented but has not yet been run against Twilio itself.
 
+## Second audit pass (21 Nov 2026, after PR #1)
+
+| # | Severity | Defect | Fix |
+| --- | --- | --- | --- |
+| 1 | High | The web app never used the refresh token: member and admin sessions ended after 15 minutes (route gate redirected to sign-in, API calls failed with 401). | API also sets a non-secret session marker cookie (`kc_s` / `kc_admin_s`) for the route gate; the web client refreshes once on 401 and retries. A 30-second grace window stops two tabs refreshing at once from being treated as token theft; an old token replayed later still ends every session. |
+| 2 | Medium | Routes named in the brief (`/dashboard`, `/verify-otp`, `/onboarding`) did not exist. | Redirects to `/app` and `/verify`; `/onboarding` resumes the saved step. |
+| 3 | Medium | Pause/resume was only in Settings, not on `/profile/privacy`. | Added the switch to the privacy page. |
+| 4 | Medium | Onboarding steps could be saved out of order (completion was still blocked). | Backend refuses a step until all earlier steps are saved; editing earlier steps still works. |
+| 5 | Low | Service Gold used outside verification (warnings, role badge, M2 badges, main-photo label, landing card). | Gold kept for the verification feature only; warnings use a separate caution colour. |
+| 6 | Low | Touch targets under 44px (small buttons 36px, switches 24px, chips ~36px). | 44px on phones. |
+| 7 | Low | Admin header logo rendered on a grey box; role badge invisible on navy. | Dark-background logo variant and a visible role pill. |
+| 8 | Test gap | No unit tests for phone validation or OTP hashing/expiry; no browser test of the full "assign by email → moderator signs in" chain. | Added. |
+| 9 | Medium | Review: concurrent refreshes of one token could all succeed and create several sessions (member and admin). | Old session claimed atomically in the same transaction as its replacement; a lost race returns 401 with `refreshRace`, a logout-revoked token stays terminal. Member side by CodeRabbit autofix (3865c15); admin side added here, with a test that fails without it. |
+| 10 | Medium | Review: a tab losing the refresh race failed its request; logout during a refresh left a session alive. | Bounded retries on `refreshRace`; logout waits for in-flight refreshes and blocks new ones (3865c15). |
+| 11 | Low | Review: privacy toggles could be overwritten by an older response; concurrent onboarding saves could drop a step. | Privacy switches are disabled while one saves (3865c15); onboarding progress row locked while merging (added here). |
+
+Totals after this pass: 43 unit, 50 API, 10 browser tests.
+
 ## Verification commands
 
 ```bash

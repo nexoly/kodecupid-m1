@@ -66,8 +66,8 @@ export function appError(
 export const errors = {
   validation: (message = 'Some details need fixing', details?: unknown) =>
     appError(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, message, details),
-  unauthenticated: (message = 'Please sign in to continue') =>
-    appError(HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHENTICATED, message),
+  unauthenticated: (message = 'Please sign in to continue', details?: unknown) =>
+    appError(HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHENTICATED, message, details),
   notFound: (message = 'Not found') =>
     appError(HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND, message),
   conflict: (code: ErrorCode, message: string, details?: unknown) =>

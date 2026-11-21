@@ -18,6 +18,14 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // Route names used in the Milestone 1 brief, mapped onto the app's pages.
+  // Query strings (e.g. ?next=) are carried over automatically.
+  async redirects() {
+    return [
+      { source: '/dashboard', destination: '/app', permanent: false },
+      { source: '/verify-otp', destination: '/verify', permanent: false },
+    ];
+  },
   async headers() {
     return [
       {

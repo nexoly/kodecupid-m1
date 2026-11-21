@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  REFRESH_REUSE_GRACE_MS,
   countryOf,
   normalizePhone,
   type MemberSession,
@@ -128,6 +129,17 @@ export class AuthService {
     }
 
     if (session!.revokedAt) {
+      // A token rotated seconds ago is a concurrent-refresh race (two tabs):
+      // refuse it, but do not treat it as theft.
+      if (
+        session!.replacedById &&
+        Date.now() - session!.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS
+      ) {
+        if (safeEqual(this.tokens.hashRefresh(parts!.secret), session!.tokenHash)) {
+          this.tokens.refreshRace();
+        }
+        this.tokens.invalidSession();
+      }
       // Token reuse after rotation: assume theft and end every session.
       await this.prisma.session.updateMany({
         where: { userId: session!.userId, revokedAt: null },
@@ -199,20 +211,42 @@ export class AuthService {
     meta: RequestMeta,
   ): Promise<IssuedTokens> {
     const { secret, hash } = this.tokens.newRefreshSecret();
-    const replacement = await this.prisma.session.create({
-      data: {
-        userId,
-        tokenHash: hash,
-        expiresAt: this.tokens.refreshExpiryDate(),
-        ip: meta.ip,
-        userAgent: meta.userAgent,
-      },
+    const replacement = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.session.updateMany({
+        where: { id: previousSessionId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      if (claimed.count === 0) return null;
+
+      const next = await tx.session.create({
+        data: {
+          userId,
+          tokenHash: hash,
+          expiresAt: this.tokens.refreshExpiryDate(),
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+        },
+      });
+      await tx.session.update({
+        where: { id: previousSessionId },
+        data: { replacedById: next.id },
+      });
+      return next;
     });
 
-    await this.prisma.session.update({
-      where: { id: previousSessionId },
-      data: { revokedAt: new Date(), replacedById: replacement.id },
-    });
+    if (!replacement) {
+      // Another request may have rotated the already-validated token, or a
+      // logout may have revoked it. Only a recent rotation can be recovered.
+      const previous = await this.prisma.session.findUnique({ where: { id: previousSessionId } });
+      if (
+        previous?.replacedById &&
+        previous.revokedAt &&
+        Date.now() - previous.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS
+      ) {
+        this.tokens.refreshRace();
+      }
+      this.tokens.invalidSession();
+    }
 
     const accessToken = await this.tokens.signMemberAccess(userId);
     return { accessToken, refreshToken: this.tokens.encodeRefresh(replacement.id, secret) };

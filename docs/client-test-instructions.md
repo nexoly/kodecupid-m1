@@ -88,7 +88,8 @@ While testing, check these specifically:
 **Expected:** the caption changes between “Visible to members” and “Hidden from members”
 immediately — there is no save button.
 5. Go back to the profile screen and confirm the Religion row shows or hides the value.
-6. In **Settings**, switch **Profile visible** off.
+6. On the same **Privacy** page, switch **Profile visible** off (the same switch is also in
+   **Settings**).
 
 **Expected:** it changes to “Profile paused” and members can no longer see you. Switching it back
 on resumes the profile.

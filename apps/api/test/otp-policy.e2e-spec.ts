@@ -111,3 +111,75 @@ describe('environment guardrails', () => {
     expect(env.TWILIO_VERIFY_SERVICE_SID).toBe('VA_test');
   });
 });
+
+describe('OTP expiry (5 minutes)', () => {
+  function statefulService() {
+    const env = loadEnv({ ...SECRETS, NODE_ENV: 'staging', OTP_ALLOW_DEBUG_CODE: 'false' } as NodeJS.ProcessEnv);
+    const rows = new Map<string, Record<string, unknown>>();
+    let sent = '';
+    const prisma = {
+      otpChallenge: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+          const row = where.id ? rows.get(where.id as string) : undefined;
+          if (!row) return { count: 0 };
+          if ('consumedAt' in where && row.consumedAt) return { count: 0 };
+          const lt = (where.attempts as { lt?: number } | undefined)?.lt;
+          if (lt !== undefined && (row.attempts as number) >= lt) return { count: 0 };
+          if ((data.attempts as { increment?: number } | undefined)?.increment) {
+            row.attempts = (row.attempts as number) + 1;
+          }
+          if (data.consumedAt) row.consumedAt = data.consumedAt;
+          return { count: 1 };
+        }),
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          const row = { id: `c${rows.size + 1}`, attempts: 0, consumedAt: null, ...data };
+          rows.set(row.id, row);
+          return row;
+        }),
+        findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.get(where.id) ?? null),
+      },
+    };
+    const sms: SmsProvider = {
+      name: 'fake',
+      codeSource: 'local',
+      async sendOtp(_phone: string, code: string) {
+        sent = code;
+      },
+    };
+    const service = new OtpService(prisma as never, { env } as never, { consume: vi.fn() } as never, sms);
+    return { service, code: () => sent, rows };
+  }
+
+  it('issues codes that expire exactly 5 minutes later', async () => {
+    const { service } = statefulService();
+    const before = Date.now();
+    const result = await service.issue({ phoneE164: REAL_NUMBER, ip: null });
+    const ttl = new Date(result.expiresAt).getTime() - before;
+    expect(ttl).toBeGreaterThanOrEqual(5 * 60_000 - 50);
+    expect(ttl).toBeLessThanOrEqual(5 * 60_000 + 1_000);
+  });
+
+  it('accepts a code just before expiry and rejects it just after', async () => {
+    vi.useFakeTimers();
+    try {
+      const fresh = statefulService();
+      vi.setSystemTime(new Date('2026-11-21T10:00:00Z'));
+      const first = await fresh.service.issue({ phoneE164: REAL_NUMBER, ip: null });
+      vi.setSystemTime(new Date('2026-11-21T10:04:59Z'));
+      await expect(
+        fresh.service.verify({ challengeId: first.challengeId, code: fresh.code() }),
+      ).resolves.toEqual({ phoneE164: REAL_NUMBER });
+
+      const late = statefulService();
+      vi.setSystemTime(new Date('2026-11-21T11:00:00Z'));
+      const second = await late.service.issue({ phoneE164: REAL_NUMBER, ip: null });
+      vi.setSystemTime(new Date('2026-11-21T11:05:01Z'));
+      await expect(
+        late.service.verify({ challengeId: second.challengeId, code: late.code() }),
+      ).rejects.toMatchObject({ code: 'OTP_EXPIRED' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

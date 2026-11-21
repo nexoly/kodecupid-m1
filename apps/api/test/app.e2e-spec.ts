@@ -249,14 +249,68 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
         ['privacy', { visibility: [{ field: 'RELIGION', visibility: 'HIDDEN' }] }],
       ];
 
+      // A later step cannot be saved before the earlier ones.
+      const skipped = await agent
+        .patch(`${prefix}/onboarding/step`)
+        .send({ step: 'profession', data: steps[2]![1] })
+        .expect(403);
+      expect(skipped.body.error.code).toBe('ONBOARDING_INCOMPLETE');
+
       for (const [step, data] of steps) {
+        // Mandatory fields are enforced on the server for each step.
+        if (step === 'identity') {
+          const invalid = await agent
+            .patch(`${prefix}/onboarding/step`)
+            .send({ step, data: { ...data, displayName: '' } })
+            .expect(400);
+          expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
+        }
         await agent.patch(`${prefix}/onboarding/step`).send({ step, data }).expect(200);
       }
+
+      // Going back to edit an earlier step is allowed and keeps progress.
+      await agent
+        .patch(`${prefix}/onboarding/step`)
+        .send({ step: 'identity', data: { ...steps[1]![1], displayName: 'Test Member' } })
+        .expect(200);
 
       const state = await agent.get(`${prefix}/onboarding/status`).expect(200);
       expect(state.body.canComplete).toBe(true);
       expect(state.body.completedSteps).toHaveLength(6);
       expect(state.body.nextStep).toBe('complete');
+    });
+
+    it('keeps every step when steps are saved concurrently', async () => {
+      const progress = await prisma.onboardingProgress.findFirstOrThrow({
+        where: { user: { phoneE164: phone } },
+      });
+      await prisma.onboardingProgress.update({
+        where: { id: progress.id },
+        data: { completedSteps: ['welcome', 'identity'] },
+      });
+
+      await Promise.all([
+        agent.patch(`${prefix}/onboarding/step`).send({
+          step: 'profession',
+          data: { profession: 'Registered Nurse', professionCategory: 'HEALTHCARE', shiftSchedule: 'NIGHT' },
+        }),
+        agent.patch(`${prefix}/onboarding/step`).send({
+          step: 'identity',
+          data: { displayName: 'Test Member', dateOfBirth: '1995-05-05', genderIdentity: 'WOMAN', interestedIn: ['MEN'] },
+        }),
+        agent.patch(`${prefix}/onboarding/step`).send({ step: 'welcome', data: {} }),
+      ]);
+
+      const after = await prisma.onboardingProgress.findUniqueOrThrow({ where: { id: progress.id } });
+      expect(after.completedSteps).toEqual(expect.arrayContaining(['welcome', 'identity', 'profession']));
+
+      for (const [step, data] of [
+        ['location', { city: 'Atlanta', region: 'Georgia', country: 'US' }],
+        ['preferences', { lookingFor: ['LONG_TERM'], ageRangeMin: 25, ageRangeMax: 40, maxDistanceKm: 30 }],
+        ['privacy', { visibility: [{ field: 'RELIGION', visibility: 'HIDDEN' }] }],
+      ] as const) {
+        await agent.patch(`${prefix}/onboarding/step`).send({ step, data }).expect(200);
+      }
     });
 
     it('refuses to complete the profile without at least one photo', async () => {
@@ -361,6 +415,112 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
     it('keeps the session alive through a refresh rotation', async () => {
       await agent.post(`${prefix}/auth/refresh`).expect(200);
       await agent.get(`${prefix}/auth/me`).expect(200);
+    });
+  });
+
+  describe('session lifetime', () => {
+    const cookieValue = (cookies: string[], name: string) =>
+      cookies
+        .find((cookie) => cookie.startsWith(`${name}=`))
+        ?.split(';')[0]
+        ?.slice(name.length + 1);
+
+    async function signIn() {
+      const otp = await request(httpServer)
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone: newPhone(), countryCode: 'BD' })
+        .expect(200);
+      const verified = await request(httpServer)
+        .post(`${prefix}/auth/verify-otp`)
+        .send({ challengeId: otp.body.challengeId, code: debugCode })
+        .expect(200);
+      const cookies = verified.headers['set-cookie'] as unknown as string[];
+      return { cookies, refresh: cookieValue(cookies, 'kc_rt')!, userId: verified.body.session.user.id as string };
+    }
+
+    it('sets a session marker for the route gate and clears it on logout', async () => {
+      const { cookies, refresh } = await signIn();
+      const marker = cookies.find((cookie) => cookie.startsWith('kc_s=1'));
+      expect(marker).toMatch(/HttpOnly/i);
+      expect(marker).toMatch(/Path=\//);
+
+      const loggedOut = await request(httpServer)
+        .post(`${prefix}/auth/logout`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(200);
+      const cleared = loggedOut.headers['set-cookie'] as unknown as string[];
+      expect(cleared.some((cookie) => cookie.startsWith('kc_s=;'))).toBe(true);
+
+      // The refresh token is revoked: it can no longer extend the session.
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(401);
+    });
+
+    it('lets exactly one of several truly concurrent refreshes win', async () => {
+      const { refresh, userId } = await signIn();
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          request(httpServer).post(`${prefix}/auth/refresh`).set('Cookie', `kc_rt=${refresh}`),
+        ),
+      );
+      expect(results.filter((result) => result.status === 200)).toHaveLength(1);
+      for (const loser of results.filter((result) => result.status !== 200)) {
+        expect(loser.status).toBe(401);
+        expect(loser.body.error.details).toEqual({ refreshRace: true });
+      }
+      expect(await prisma.session.count({ where: { userId, revokedAt: null } })).toBe(1);
+    });
+
+    it('treats two simultaneous refreshes (two tabs) as a race, not as theft', async () => {
+      const { refresh, userId } = await signIn();
+      const refreshOnce = () =>
+        request(httpServer).post(`${prefix}/auth/refresh`).set('Cookie', `kc_rt=${refresh}`);
+      const results = await Promise.all([refreshOnce(), refreshOnce()]);
+      expect(results.map(({ status }) => status).sort()).toEqual([200, 401]);
+      const winner = results.find(({ status }) => status === 200)!;
+      const loser = results.find(({ status }) => status === 401)!;
+      expect(loser.body.error).toMatchObject({
+        code: 'UNAUTHENTICATED',
+        details: { refreshRace: true },
+      });
+      const rotated = cookieValue(winner.headers['set-cookie'] as unknown as string[], 'kc_rt')!;
+      expect(await prisma.session.count({ where: { userId, revokedAt: null } })).toBe(1);
+
+      // A subsequent use of the old token is also rejected within the grace window.
+      await refreshOnce().expect(401);
+
+      // The winning tab's session survives.
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${rotated}`)
+        .expect(200);
+      const live = await prisma.session.count({ where: { userId, revokedAt: null } });
+      expect(live).toBe(1);
+    });
+
+    it('ends every session when an old refresh token is replayed later', async () => {
+      const { refresh, userId } = await signIn();
+      await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(200);
+
+      // Simulate the replay arriving well after the grace window.
+      const sessionId = refresh.split('.')[0]!;
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: { revokedAt: new Date(Date.now() - 5 * 60_000) },
+      });
+
+      const replay = await request(httpServer)
+        .post(`${prefix}/auth/refresh`)
+        .set('Cookie', `kc_rt=${refresh}`)
+        .expect(401);
+      expect(replay.body.error.details).toBeUndefined();
+      const live = await prisma.session.count({ where: { userId, revokedAt: null } });
+      expect(live).toBe(0);
     });
   });
 
@@ -583,6 +743,38 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
       expect(statuses[5]).toBe(429);
 
       app.get(RateLimiterService).clear();
+    });
+
+    it('lets exactly one of several concurrent admin refreshes win', async () => {
+      const login = await request(httpServer)
+        .post(`${prefix}/admin/auth/login`)
+        .send({
+          email: process.env.SEED_MODERATOR_EMAIL ?? 'moderator@kodecupid.test',
+          password: process.env.SEED_MODERATOR_PASSWORD ?? 'ChangeMe!Mod1',
+        })
+        .expect(200);
+      const refresh = (login.headers['set-cookie'] as unknown as string[])
+        .find((cookie) => cookie.startsWith('kc_admin_rt='))!
+        .split(';')[0]!
+        .slice('kc_admin_rt='.length);
+      const sessionId = refresh.split('.')[0]!;
+
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          request(httpServer)
+            .post(`${prefix}/admin/auth/refresh`)
+            .set('Cookie', `kc_admin_rt=${refresh}`),
+        ),
+      );
+      expect(results.filter((result) => result.status === 200)).toHaveLength(1);
+      for (const loser of results.filter((result) => result.status !== 200)) {
+        expect(loser.status).toBe(401);
+        expect(loser.body.error.details).toEqual({ refreshRace: true });
+      }
+      // The old session was replaced by exactly one new session.
+      expect(await prisma.adminSession.count({ where: { replacedById: { not: null }, id: sessionId } })).toBe(1);
+      const replacedBy = (await prisma.adminSession.findUniqueOrThrow({ where: { id: sessionId } })).replacedById!;
+      expect(await prisma.adminSession.count({ where: { id: replacedBy, revokedAt: null } })).toBe(1);
     });
 
     it('gives the Moderator the member list with masked phone numbers', async () => {

@@ -121,6 +121,10 @@ export class TokensService {
     throw errors.unauthenticated('Your session has expired. Please sign in again.');
   }
 
+  refreshRace(): never {
+    throw errors.unauthenticated('Please sign in again.', { refreshRace: true });
+  }
+
   invalidSession(): never {
     throw errors.unauthenticated('Please sign in again.');
   }

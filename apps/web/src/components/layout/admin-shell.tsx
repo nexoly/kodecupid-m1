@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ADMIN_NAV, ADMIN_ROLE_LABELS, can, type AdminRole } from '@kodecupid/shared';
 import { useSession } from '@/app/providers';
 import { Logo } from '@/components/brand/logo';
-import { Badge, LoadingBlock } from '@/components/ui/feedback';
+import { LoadingBlock } from '@/components/ui/feedback';
 import { Button } from '@/components/ui/button';
 
 /**
@@ -44,13 +44,13 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <span className="rounded-xl bg-white/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider">
               Admin
             </span>
-            <div className="[&_span:last-child]:text-white [&_span:first-child]:bg-white/10">
-              <Logo href="/admin/users" size="sm" />
-            </div>
+            <Logo href="/admin/users" size="sm" onDark />
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden text-sm text-white/70 sm:inline">{admin.admin.email}</span>
-            <Badge tone="gold">{ADMIN_ROLE_LABELS[role]}</Badge>
+            <span className="rounded-full border border-white/25 bg-white/10 px-2.5 py-0.5 text-xs font-semibold text-white">
+              {ADMIN_ROLE_LABELS[role]}
+            </span>
             <Button
               variant="ghost"
               size="sm"

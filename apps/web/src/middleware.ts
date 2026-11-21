@@ -6,8 +6,14 @@ import { NextResponse, type NextRequest } from 'next/server';
  *
  * Cookie names mirror `MEMBER_COOKIE` / `ADMIN_COOKIE` in packages/shared.
  */
-const MEMBER_COOKIE = 'kc_at';
-const ADMIN_COOKIE = 'kc_admin_at';
+// An access cookie, or the session marker set alongside the 30-day refresh
+// cookie (the page then refreshes its expired access token on first call).
+const MEMBER_COOKIES = ['kc_at', 'kc_s'];
+const ADMIN_COOKIES = ['kc_admin_at', 'kc_admin_s'];
+
+function hasAny(request: NextRequest, names: string[]): boolean {
+  return names.some((name) => request.cookies.has(name));
+}
 
 const MEMBER_PREFIXES = ['/app', '/profile', '/settings', '/onboarding'];
 const ADMIN_PUBLIC_PATHS = ['/admin/login', '/admin/accept-invite'];
@@ -19,7 +25,7 @@ export function middleware(request: NextRequest): NextResponse {
     if (ADMIN_PUBLIC_PATHS.includes(pathname)) {
       return NextResponse.next();
     }
-    if (!request.cookies.get(ADMIN_COOKIE)) {
+    if (!hasAny(request, ADMIN_COOKIES)) {
       const url = new URL('/admin/login', request.url);
       url.searchParams.set('next', pathname);
       return NextResponse.redirect(url);
@@ -28,7 +34,7 @@ export function middleware(request: NextRequest): NextResponse {
   }
 
   if (MEMBER_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
-    if (!request.cookies.get(MEMBER_COOKIE)) {
+    if (!hasAny(request, MEMBER_COOKIES)) {
       const url = new URL('/login', request.url);
       url.searchParams.set('next', pathname);
       return NextResponse.redirect(url);

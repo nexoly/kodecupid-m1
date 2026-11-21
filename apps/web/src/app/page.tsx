@@ -12,12 +12,13 @@ const FEATURES = [
   {
     title: 'Privacy you actually control',
     body: 'Every field has its own switch — hide your workplace, religion or exact area and show only what you want.',
-    accent: 'bg-gold-soft text-navy',
+    accent: 'bg-navy/10 text-navy',
   },
   {
     title: 'Verified, adult members',
     body: 'Phone verification, a real age gate and mandatory community guidelines keep the community accountable.',
-    accent: 'bg-navy/10 text-navy',
+    // Verification-related: the one place Service Gold belongs on this page.
+    accent: 'bg-gold-soft text-navy',
   },
 ];
 
@@ -79,12 +80,12 @@ export default function HomePage() {
             <Card className="relative overflow-hidden bg-navy p-0 text-white">
               <div className="absolute -right-16 -top-16 size-56 rounded-full bg-crimson/40 blur-3xl" />
               <div className="relative space-y-4 p-6 sm:p-8">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gold">
+                <p className="text-xs font-semibold uppercase tracking-widest text-white/70">
                   Tonight&apos;s shift
                 </p>
                 <div className="rounded-2xl bg-white/10 p-4 backdrop-blur">
                   <div className="flex items-center gap-3">
-                    <span className="grid size-12 place-items-center rounded-full bg-gold text-lg font-semibold text-navy">
+                    <span className="grid size-12 place-items-center rounded-full bg-white/20 text-lg font-semibold text-white">
                       AR
                     </span>
                     <div>
@@ -98,7 +99,7 @@ export default function HomePage() {
                         {chip}
                       </span>
                     ))}
-                    <span className="rounded-full border border-gold/50 px-2.5 py-1 text-gold">
+                    <span className="rounded-full border border-white/40 px-2.5 py-1 text-white/80">
                       Religion hidden
                     </span>
                   </div>

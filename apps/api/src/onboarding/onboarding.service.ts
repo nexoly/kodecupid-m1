@@ -60,6 +60,20 @@ export class OnboardingService {
    * the profile screens edit, so there is no separate "draft profile".
    */
   async saveStep(userId: string, step: OnboardingStep, payload: unknown): Promise<StepSaveResult> {
+    // Steps are saved in order: a later step cannot be stored before the
+    // earlier ones (going back to edit an earlier step is always allowed).
+    const existing = await this.ensureProgress(userId);
+    const done = existing.completedSteps as OnboardingStep[];
+    const earlier = ONBOARDING_SEQUENCE.slice(0, ONBOARDING_SEQUENCE.indexOf(step));
+    const skipped = earlier.filter((previous) => !done.includes(previous));
+    if (skipped.length > 0) {
+      throw errors.forbidden(
+        ErrorCode.ONBOARDING_INCOMPLETE,
+        'Please finish the earlier onboarding steps first.',
+        { missing: skipped },
+      );
+    }
+
     switch (step) {
       case 'welcome':
         break;
@@ -138,15 +152,22 @@ export class OnboardingService {
         });
     }
 
-    const progress = await this.ensureProgress(userId);
-    const completed = Array.from(
-      new Set([...(progress.completedSteps as OnboardingStep[]), step]),
-    ) as OnboardingStep[];
-    const nextStep = nextIncompleteStep(completed);
-
-    await this.prisma.onboardingProgress.update({
-      where: { userId },
-      data: { completedSteps: completed, currentStep: nextStep },
+    // Lock this member's progress row while merging, so concurrent saves
+    // (double submit, two tabs) each add their step instead of overwriting
+    // the array from a stale snapshot.
+    await this.ensureProgress(userId);
+    const nextStep = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "onboarding_progress" WHERE "userId" = ${userId} FOR UPDATE`;
+      const locked = await tx.onboardingProgress.findUniqueOrThrow({ where: { userId } });
+      const completed = Array.from(
+        new Set([...(locked.completedSteps as OnboardingStep[]), step]),
+      ) as OnboardingStep[];
+      const next = nextIncompleteStep(completed);
+      await tx.onboardingProgress.update({
+        where: { userId },
+        data: { completedSteps: completed, currentStep: next },
+      });
+      return next;
     });
 
     return {
