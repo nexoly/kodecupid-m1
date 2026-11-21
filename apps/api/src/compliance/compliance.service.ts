@@ -74,6 +74,14 @@ export class ComplianceService {
       );
     }
 
+    if (member.ageGateBlockedAt) {
+      throw errors.forbidden(
+        ErrorCode.AGE_RESTRICTED,
+        'KodeCupid is only available to people aged 18 and over.',
+        { minimumAge: 18 },
+      );
+    }
+
     const dateOfBirth = new Date(`${input.dateOfBirth}T00:00:00.000Z`);
     if (Number.isNaN(dateOfBirth.getTime()) || dateOfBirth.getTime() > Date.now()) {
       throw errors.validation('Enter a valid date of birth', {
@@ -82,6 +90,10 @@ export class ComplianceService {
     }
 
     if (!isAdult(dateOfBirth, new Date(), 18)) {
+      await this.prisma.user.update({
+        where: { id: member.id },
+        data: { ageGateBlockedAt: new Date() },
+      });
       throw errors.forbidden(
         ErrorCode.AGE_RESTRICTED,
         'KodeCupid is only available to people aged 18 and over.',

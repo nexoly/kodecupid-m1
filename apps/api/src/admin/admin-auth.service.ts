@@ -78,6 +78,10 @@ export class AdminAuthService {
       throw invalid;
     }
 
+    // Only failed attempts should count towards the lockout: a successful
+    // sign-in clears this account's counter (the per-IP limit still applies).
+    this.limiter.reset(`admin-login:email:${input.email}`);
+
     const { secret, hash } = this.tokens.newRefreshSecret();
     const session = await this.prisma.adminSession.create({
       data: {

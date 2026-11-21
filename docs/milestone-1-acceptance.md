@@ -21,39 +21,52 @@ Traceability from the client's Definition of Done to the code and the checks tha
 | Seed data: 1 Super Admin, 1 Moderator, 3–5 members | `apps/api/scripts/seed.ts` | `pnpm db:seed` output; e2e admin login |
 | Staging deployment + credentials + test script | `render.yaml`, `apps/web/vercel.json`, `apps/api/Dockerfile`, `docs/deployment.md`, `docs/client-test-instructions.md` | deploy checklist in `docs/deployment.md` (executed when account tokens are provided) |
 
-## Verification run (Milestone 1 close-out)
+## Verification run (QA audit, 21 Nov 2026)
 
-Executed on the final commit against Neon PostgreSQL 16 + PostGIS 3.6.4:
+Executed against a local PostgreSQL 16.15 + PostGIS 3.4.2 database (standing in for Neon, which
+needs the client's account credentials):
 
 | Check | Result |
 | --- | --- |
-| `pnpm typecheck` | ✅ 3 packages, no errors |
+| `pnpm typecheck` / `pnpm lint` | ✅ 3 packages, no errors |
 | `pnpm test` | ✅ 28/28 unit tests |
-| `pnpm test:e2e` | ✅ 30/30 API flows against the live database |
-| `pnpm test:web` | ✅ 4/4 Playwright browser flows |
+| `pnpm test:e2e` | ✅ 42/42 (API flows on the live database + staging OTP policy) |
+| `pnpm test:web` | ✅ 6/6 Playwright flows, incl. a full 360px acceptance journey with no console errors and no horizontal scroll |
 | `pnpm build` (shared + api + web) | ✅ |
-| `prisma migrate status` | ✅ 3 migrations applied |
-| `SELECT postgis_full_version()` | ✅ PostGIS 3.6.4 |
-| `profiles.locationPoint` | ✅ `geography(Point,4326)` + GiST index |
-| `pnpm db:seed` (run twice) | ✅ idempotent — counts unchanged, 2 admins, 5 sample members, Atlanta + Charlotte |
-| `/api/v1/health` | ✅ `{ status: "ok" }` |
+| `prisma migrate deploy` / `status` | ✅ 4 migrations applied, schema up to date |
+| `postgis_full_version()` | ✅ PostGIS 3.4.2 |
+| `profiles.locationPoint` | ✅ `geography(Point,4326)` (generated from lat/lng) + GiST index |
+| `pnpm db:seed` (run repeatedly) | ✅ idempotent: 2 admins, 5 sample members, Atlanta + Charlotte with the 200 threshold |
+| `GET /api/v1/health` | ✅ `{ status: "ok", database: "connected", postgis: "enabled" }` |
+| Staging-mode OTP policy (live server, `NODE_ENV=staging`) | ✅ debug code refused for real numbers, accepted only for allow-listed seeded numbers, never returned by the API |
 
-### Blocks closed in this pass
+### Defects found and fixed in the audit
 
-- **Render blueprint could not boot.** `render.yaml` set `NODE_ENV=production` together with
-  `OTP_ALLOW_DEBUG_CODE=true`, which the environment schema rejects at startup. Added an explicit
-  `staging` environment: staging may use the debug OTP, `production` still refuses it at boot.
-  Also added the missing `SAFETY_TIPS_VERSION` to the blueprint.
-- **No request logging.** Added a one-line access log (`METHOD path status duration requestId`) so a
-  client report can be matched to a server-side request id.
+| # | Severity | Defect | Fix |
+| --- | --- | --- | --- |
+| 1 | Critical | On staging, the shared debug OTP worked for **every** phone number and was returned in the API response, so anyone could sign in to any real member's account. | Debug code accepted outside dev/test only for numbers in `OTP_DEBUG_PHONES`; never echoed outside dev/test; production still refuses it at boot. |
+| 2 | High | No real SMS path for staging: `TWILIO_VERIFY_SERVICE_SID` existed but was unused, and the blueprint shipped `SMS_PROVIDER=console`. | Added a Twilio Verify provider (Twilio generates/checks the code); blueprint now uses `twilio`; production refuses the console provider. |
+| 3 | High | OTP rate limit (3 per number per 15 min) was in memory: it reset on every deploy/restart and didn't hold across instances. | Counted from `otp_challenges` in the database. |
+| 4 | Medium | OTP reuse/attempt race: parallel requests could consume one code twice or exceed 5 attempts. | Atomic conditional updates for attempts and consumption; a new code invalidates older open codes. |
+| 5 | Medium | OTP codes stored as plain `sha256(code + secret)`. | HMAC-SHA256. |
+| 6 | Medium | A blocked under-18 user could immediately re-submit an older date of birth. | `users.ageGateBlockedAt` (additive migration) keeps the gate closed once an under-18 date is submitted. |
+| 7 | Medium | Health endpoint didn't check the database or PostGIS. | `/health` checks both and returns 503 with details when either fails. |
+| 8 | Medium | A member who left mid-onboarding could open `/app` and skip the remaining steps. | Member shell sends them back to their saved step. |
+| 9 | Medium | Admin login lockout counted successful sign-ins: 5 normal logins in 15 min locked the account. | Counter resets on success; only failures count. |
+| 10 | Medium | The seed printed admin passwords to the logs, reset admins' changed roles/passwords on every run, and accepted the public default passwords on staging. | No passwords printed; existing admins are left unchanged; staging/production need unique 12+ character passwords. |
+| 11 | Low | Default admin passwords and the debug code were published in README/docs/render.yaml. | Removed; credentials go privately to the client. |
+| 12 | Low | Safety Tips missing from Settings and the auth fine print; compliance error named only two documents. | Copy updated to all three documents. |
+| 13 | Low | `POST /auth/request-otp` rejected a full E.164 number without a separate `countryCode`. | `countryCode` is optional when the number starts with `+`. |
+| 14 | Low | Missing `/favicon.ico` caused a 404 console error. | Added a favicon from the brand icon. |
+| 15 | Test gap | Every OTP test used the debug code, so the real hashed-code path was never exercised. | e2e tests capture the real texted code (hash storage, reuse, race, supersede, 5-attempt lock). |
 
-### Open blocker: public staging URLs
+### Open blockers (need the client's or developer's accounts)
 
-Frontend and backend deployment could not be completed from this environment because no
-Render/Railway service credentials (and no Twilio credentials) are available here. The exact
-blueprint, Dockerfile, Vercel config and post-deploy checklist are in `docs/deployment.md`; once the
-service and Twilio credentials are supplied the deploy is a mechanical step. Until then the
-client-facing test script in `docs/client-test-instructions.md` runs against the local stack.
+- **Staging deployment** (Vercel + Render/Railway) and the **Neon** database: no account
+  credentials are available in this environment. The blueprint, Dockerfile, Vercel config and
+  checklist are ready (`docs/deployment.md`).
+- **Real SMS test**: needs a Twilio account (Account SID, Auth Token, Verify Service SID).
+  The Twilio Verify integration is implemented but has not yet been run against Twilio itself.
 
 ## Verification commands
 

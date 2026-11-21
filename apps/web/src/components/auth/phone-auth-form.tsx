@@ -107,8 +107,9 @@ export function PhoneAuthForm({ flow }: { flow: 'register' | 'login' }) {
       </Button>
 
       <p className="text-center text-xs leading-relaxed text-muted">
-        By continuing you confirm you are 18 or older and agree to our Terms of Service and
-        Community Guidelines, which you will review on the next screen.
+        {flow === 'register'
+          ? 'KodeCupid is for adults 18 and over. Next, you will confirm your date of birth and review our Terms of Service, Community Guidelines and Safety Tips.'
+          : 'KodeCupid is for adults 18 and over. By signing in you continue to agree to our Terms of Service, Community Guidelines and Safety Tips.'}
       </p>
     </form>
   );

@@ -22,12 +22,12 @@ Base URL: `{PUBLIC_API_URL}/api/v1`. All responses are JSON. Errors use one enve
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/health` | liveness probe |
-| GET | `/health/db` | database connectivity |
+| GET | `/health` | readiness: `{ status, database: "connected", postgis: "enabled" }`; 503 with the same shape if either fails |
+| GET | `/health/db` | alias of `/health` |
 | GET | `/meta` | app name, legal versions, `debugOtpEnabled`, `smsProvider` |
 | GET | `/compliance/documents` | current legal documents + versions |
 | GET | `/files/:key` | locally stored photo (unguessable key) |
-| POST | `/auth/otp/request` | send a 6-digit code (`phone`, `countryCode`) |
+| POST | `/auth/request-otp` (alias `/auth/otp/request`) | send a 6-digit code: `phone` as full E.164 (`+1404…`), or national number + `countryCode`. Max 3 per number per 15 min |
 | POST | `/auth/otp/verify` | verify code (`challengeId`, `code`) → sets cookies |
 | POST | `/auth/refresh` | rotate refresh token |
 | POST | `/auth/logout` | revoke the session |
