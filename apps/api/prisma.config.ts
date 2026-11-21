@@ -12,11 +12,19 @@ import { defineConfig } from 'prisma/config';
  *
  * Swapping to AWS RDS later only changes these two environment variables.
  */
-const migrationUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+const configuredUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 
-if (!migrationUrl) {
+// `prisma generate` only reads the schema and never connects, so it must work
+// without a database (CI build job, fresh checkouts). Every command that talks
+// to the database still fails fast with a clear message.
+const isGenerateOnly = process.argv.includes('generate');
+
+if (!configuredUrl && !isGenerateOnly) {
   throw new Error('Set DATABASE_URL_UNPOOLED (preferred) or DATABASE_URL for Prisma CLI commands.');
 }
+
+const migrationUrl =
+  configuredUrl ?? 'postgresql://unused:unused@localhost:5432/unused?schema=public';
 
 export default defineConfig({
   schema: './prisma/schema.prisma',
