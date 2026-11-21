@@ -27,8 +27,8 @@ details, role management, settings and monetization. Compare
 | --- | --- | --- |
 | Static types (3 packages) | `pnpm typecheck` | ✅ |
 | Unit tests: privacy filtering, age gate, permission matrix, onboarding resume | `pnpm test` | ✅ 28 passed |
-| API flows against PostgreSQL + PostGIS | `pnpm test:e2e` | ✅ 30 passed |
-| Browser flows (register → onboarding → profile → admin roles) | `pnpm test:web` | ✅ 4 passed |
+| API flows against PostgreSQL + PostGIS (incl. real hashed OTP path, OTP race, staging OTP policy) | `pnpm test:e2e` | ✅ 42 passed |
+| Browser flows at 360px (register → onboarding back/resume → profile edit → API-enforced privacy → pause → re-login → admin roles) | `pnpm test:web` | ✅ 6 passed |
 | Production builds | `pnpm build` | ✅ |
 
 ## Running it right now (local)
@@ -41,8 +41,9 @@ The dev stack runs on the hosted PostGIS database configured in `apps/api/.env`:
 | Admin area | http://localhost:3000/admin/login |
 | API | http://localhost:4000/api/v1/health |
 
-Seeded logins (change before any real use): `admin@kodecupid.test` / `ChangeMe!Admin1` and
-`moderator@kodecupid.test` / `ChangeMe!Mod1`. OTP debug code: `246810`. The client-facing walkthrough
+Seeded admin logins and the development OTP code come from `apps/api/.env` (see `.env.example`;
+the defaults are for local development only and the seed refuses them on staging/production).
+Staging credentials are shared privately, never in the repository. The client-facing walkthrough
 is [`docs/client-test-instructions.md`](./docs/client-test-instructions.md).
 
 ## Quick start

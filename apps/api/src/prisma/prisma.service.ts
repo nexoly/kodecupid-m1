@@ -35,4 +35,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async ping(): Promise<void> {
     await this.$queryRaw`SELECT 1`;
   }
+
+  /** PostGIS library version, or null when the extension is not installed. */
+  async postgisVersion(): Promise<string | null> {
+    const rows = await this.$queryRaw<{ version: string | null }[]>`
+      SELECT extversion AS version FROM pg_extension WHERE extname = 'postgis'`;
+    return rows[0]?.version ?? null;
+  }
 }

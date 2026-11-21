@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { RateLimiterService } from '../src/common/rate-limiter.service';
+import { SMS_PROVIDER, type SmsProvider } from '../src/auth/sms/sms.provider';
 
 /** 1×1 PNG — enough for the magic-byte check and the image pipeline. */
 const TINY_PNG = Buffer.from(
@@ -33,13 +35,26 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
   const guidelinesVersion = process.env.GUIDELINES_VERSION ?? '1.0';
   const safetyTipsVersion = process.env.SAFETY_TIPS_VERSION ?? '1.0';
 
+  /** Captures the real (non-debug) codes the API would have texted. */
+  const sentCodes = new Map<string, string>();
+  const capturingSms: SmsProvider = {
+    name: 'capture',
+    codeSource: 'local',
+    async sendOtp(phoneE164: string, code: string) {
+      sentCodes.set(phoneE164, code);
+    },
+  };
+
   const newPhone = () =>
     `+88017${Math.floor(10_000_000 + Math.random() * 89_999_999).toString().slice(0, 8)}`;
 
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
 
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(SMS_PROVIDER)
+      .useValue(capturingSms)
+      .compile();
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix(process.env.API_PREFIX ?? 'api/v1');
     app.use(cookieParser());
@@ -73,6 +88,8 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
         .expect(200)
         .expect((response) => {
           expect(response.body.status).toBe('ok');
+          expect(response.body.database).toBe('connected');
+          expect(response.body.postgis).toBe('enabled');
         });
 
       await request(httpServer).get(`${prefix}/health/db`).expect(200);
@@ -133,16 +150,37 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
       expect(response.body.error.code).toBe('COMPLIANCE_REQUIRED');
     });
 
-    it('blocks under-18 registrations', async () => {
+    it('blocks under-18 registrations and keeps the age gate closed', async () => {
+      // Separate account: an under-18 submission locks the age gate for good.
+      const minor = request.agent(httpServer);
+      const otp = await minor
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone: newPhone(), countryCode: 'BD' })
+        .expect(200);
+      await minor
+        .post(`${prefix}/auth/verify-otp`)
+        .send({ challengeId: otp.body.challengeId, code: debugCode })
+        .expect(200);
+
       const underageDob = new Date();
       underageDob.setUTCFullYear(underageDob.getUTCFullYear() - 17);
 
-      const response = await agent
+      const response = await minor
         .post(`${prefix}/compliance/accept`)
         .send(compliancePayload({ dateOfBirth: underageDob.toISOString().slice(0, 10) }))
         .expect(403);
-
       expect(response.body.error.code).toBe('AGE_RESTRICTED');
+
+      // Re-entering an adult date of birth does not reopen the gate.
+      const retry = await minor
+        .post(`${prefix}/compliance/accept`)
+        .send(compliancePayload())
+        .expect(403);
+      expect(retry.body.error.code).toBe('AGE_RESTRICTED');
+
+      // And onboarding/profile stay closed.
+      await minor.get(`${prefix}/profile/me`).expect(403);
+      await minor.get(`${prefix}/onboarding/status`).expect(403);
     });
 
     it('requires Terms, Community Guidelines and Safety Tips to be accepted', async () => {
@@ -348,6 +386,94 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
       expect(reused.body.error.code).toBe('OTP_INVALID');
     });
 
+    it('verifies the real texted code, stores only its hash, and refuses reuse', async () => {
+      const agent = request.agent(httpServer);
+      const phone = newPhone();
+      const otp = await agent
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone, countryCode: 'BD' })
+        .expect(200);
+
+      const code = sentCodes.get(phone);
+      expect(code).toMatch(/^\d{6}$/);
+
+      const stored = await prisma.otpChallenge.findUniqueOrThrow({
+        where: { id: otp.body.challengeId },
+      });
+      expect(stored.codeHash).not.toContain(code!);
+      expect(stored.codeHash).toMatch(/^[0-9a-f]{64}$/);
+
+      await agent
+        .post(`${prefix}/auth/verify-otp`)
+        .send({ challengeId: otp.body.challengeId, code })
+        .expect(200);
+
+      const reused = await request(httpServer)
+        .post(`${prefix}/auth/verify-otp`)
+        .send({ challengeId: otp.body.challengeId, code })
+        .expect(400);
+      expect(reused.body.error.code).toBe('OTP_INVALID');
+    });
+
+    it('lets only one of several simultaneous verifications use a code', async () => {
+      const phone = newPhone();
+      const otp = await request(httpServer)
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone, countryCode: 'BD' })
+        .expect(200);
+      const code = sentCodes.get(phone);
+
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          request(httpServer)
+            .post(`${prefix}/auth/verify-otp`)
+            .send({ challengeId: otp.body.challengeId, code }),
+        ),
+      );
+      expect(results.filter((result) => result.status === 200)).toHaveLength(1);
+    });
+
+    it('invalidates an older code when a new one is requested', async () => {
+      const phone = newPhone();
+      const first = await request(httpServer)
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone, countryCode: 'BD' })
+        .expect(200);
+      const firstCode = sentCodes.get(phone);
+      await request(httpServer)
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone, countryCode: 'BD' })
+        .expect(200);
+
+      await request(httpServer)
+        .post(`${prefix}/auth/verify-otp`)
+        .send({ challengeId: first.body.challengeId, code: firstCode })
+        .expect(400);
+    });
+
+    it('locks a code after five wrong attempts, even with the right code', async () => {
+      const phone = newPhone();
+      const otp = await request(httpServer)
+        .post(`${prefix}/auth/request-otp`)
+        .send({ phone, countryCode: 'BD' })
+        .expect(200);
+      const code = sentCodes.get(phone)!;
+      const wrong = code === '000000' ? '111111' : '000000';
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await request(httpServer)
+          .post(`${prefix}/auth/verify-otp`)
+          .send({ challengeId: otp.body.challengeId, code: wrong })
+          .expect(400);
+      }
+
+      const locked = await request(httpServer)
+        .post(`${prefix}/auth/verify-otp`)
+        .send({ challengeId: otp.body.challengeId, code })
+        .expect(429);
+      expect(locked.body.error.code).toBe('OTP_ATTEMPTS_EXCEEDED');
+    });
+
     it('rejects an expired code', async () => {
       const agent = request.agent(httpServer);
       const phone = newPhone();
@@ -433,6 +559,30 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
         })
         .expect(200);
       expect(moderatorLogin.body.admin.role).toBe('MODERATOR');
+    });
+
+    it('locks admin sign-in after repeated wrong passwords, but never for successful sign-ins', async () => {
+      const email = process.env.SEED_MODERATOR_EMAIL ?? 'moderator@kodecupid.test';
+      const password = process.env.SEED_MODERATOR_PASSWORD ?? 'ChangeMe!Mod1';
+
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await request(httpServer)
+          .post(`${prefix}/admin/auth/login`)
+          .send({ email, password })
+          .expect(200);
+      }
+
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const response = await request(httpServer)
+          .post(`${prefix}/admin/auth/login`)
+          .send({ email, password: 'definitely-wrong-password' });
+        statuses.push(response.status);
+      }
+      expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+      expect(statuses[5]).toBe(429);
+
+      app.get(RateLimiterService).clear();
     });
 
     it('gives the Moderator the member list with masked phone numbers', async () => {

@@ -1,4 +1,5 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { APP_NAME, MIN_AGE, type MetaInfo } from '@kodecupid/shared';
 import { legalVersionsOf } from '../config/app-config';
 import { AppConfigService } from '../config/app-config.module';
@@ -8,20 +9,54 @@ import { PrismaService } from '../prisma/prisma.service';
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Liveness + readiness in one call: the platform health check (Render /
+   * Railway / Docker) only reports healthy when the database and PostGIS
+   * answer. Returns 503 with the same JSON shape when either is unavailable.
+   */
   @Get('health')
-  health(): { status: 'ok'; uptime: number; timestamp: string } {
-    return { status: 'ok', uptime: Math.round(process.uptime()), timestamp: new Date().toISOString() };
+  async health(@Res({ passthrough: true }) response: Response): Promise<HealthReport> {
+    const report = await this.check();
+    if (report.status !== 'ok') {
+      response.status(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    return report;
   }
 
   @Get('health/db')
-  async database(): Promise<{ status: 'ok'; database: 'reachable' }> {
+  database(@Res({ passthrough: true }) response: Response): Promise<HealthReport> {
+    return this.health(response);
+  }
+
+  private async check(): Promise<HealthReport> {
+    const base = { uptime: Math.round(process.uptime()), timestamp: new Date().toISOString() };
     try {
       await this.prisma.ping();
-      return { status: 'ok', database: 'reachable' };
     } catch {
-      throw new ServiceUnavailableException('Database is not reachable');
+      return { status: 'error', database: 'disconnected', postgis: 'unknown', ...base };
+    }
+    try {
+      const version = await this.prisma.postgisVersion();
+      return {
+        status: version ? 'ok' : 'error',
+        database: 'connected',
+        postgis: version ? 'enabled' : 'missing',
+        ...(version ? { postgisVersion: version } : {}),
+        ...base,
+      };
+    } catch {
+      return { status: 'error', database: 'connected', postgis: 'missing', ...base };
     }
   }
+}
+
+interface HealthReport {
+  status: 'ok' | 'error';
+  database: 'connected' | 'disconnected';
+  postgis: 'enabled' | 'missing' | 'unknown';
+  postgisVersion?: string;
+  uptime: number;
+  timestamp: string;
 }
 
 @Controller('meta')

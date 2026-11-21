@@ -30,7 +30,7 @@ export class ComplianceGuard implements CanActivate {
     if (compliance.missing.length > 0) {
       throw errors.forbidden(
         ErrorCode.COMPLIANCE_REQUIRED,
-        'Accept the Terms of Service and Community Guidelines to continue.',
+        'Accept the Terms of Service, Community Guidelines and Safety Tips to continue.',
         { missing: compliance.missing },
       );
     }

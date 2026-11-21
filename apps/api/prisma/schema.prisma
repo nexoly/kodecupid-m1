@@ -212,6 +212,9 @@ model User {
   status                UserStatus    @default(PENDING_COMPLIANCE)
   phoneVerifiedAt       DateTime?
   ageVerifiedAt         DateTime?
+  /// Set when an under-18 date of birth is submitted. The age gate then stays
+  /// closed so the date cannot simply be re-entered; support can review.
+  ageGateBlockedAt      DateTime?
   onboardingCompletedAt DateTime?
   lastLoginAt           DateTime?
   createdAt             DateTime      @default(now())

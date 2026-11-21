@@ -138,6 +138,10 @@ export default function SettingsPage() {
             <dd className="font-medium text-navy">v{meta?.legalVersions.guidelines ?? '—'} accepted</dd>
           </div>
           <div className="flex items-center justify-between py-2.5">
+            <dt className="text-muted">Safety Tips</dt>
+            <dd className="font-medium text-navy">v{meta?.legalVersions.safetyTips ?? '—'} accepted</dd>
+          </div>
+          <div className="flex items-center justify-between py-2.5">
             <dt className="text-muted">Privacy Policy</dt>
             <dd className="font-medium text-navy">v{meta?.legalVersions.privacy ?? '—'}</dd>
           </div>

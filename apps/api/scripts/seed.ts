@@ -249,11 +249,21 @@ async function seedAdmin(
   role: 'SUPER_ADMIN' | 'MODERATOR',
   password: string,
 ): Promise<void> {
-  const passwordHash = await hashPassword(password);
-  await prisma.adminUser.upsert({
-    where: { email },
-    create: { email, name, role, passwordHash, status: 'ACTIVE' },
-    update: { name, role, passwordHash, status: 'ACTIVE' },
+  // Idempotent and non-destructive: an existing admin keeps the role and
+  // password they have now (a Super Admin may have changed either). Set
+  // SEED_RESET_ADMIN_PASSWORDS=true to deliberately re-apply the seed password.
+  const existing = await prisma.adminUser.findUnique({ where: { email } });
+  if (existing) {
+    if (process.env.SEED_RESET_ADMIN_PASSWORDS === 'true') {
+      await prisma.adminUser.update({
+        where: { email },
+        data: { passwordHash: await hashPassword(password) },
+      });
+    }
+    return;
+  }
+  await prisma.adminUser.create({
+    data: { email, name, role, passwordHash: await hashPassword(password), status: 'ACTIVE' },
   });
 }
 
@@ -472,7 +482,25 @@ async function seedRegions(): Promise<void> {
   }
 }
 
+const DEFAULT_SEED_PASSWORDS = new Set(['ChangeMe!Admin1', 'ChangeMe!Mod1']);
+
+function assertSafeSeedPasswords(): void {
+  const hosted = env.NODE_ENV === 'staging' || env.NODE_ENV === 'production';
+  if (!hosted) return;
+  for (const [key, value] of [
+    ['SEED_ADMIN_PASSWORD', env.SEED_ADMIN_PASSWORD],
+    ['SEED_MODERATOR_PASSWORD', env.SEED_MODERATOR_PASSWORD],
+  ] as const) {
+    if (DEFAULT_SEED_PASSWORDS.has(value) || value.length < 12) {
+      throw new Error(
+        `${key} must be set to a unique password of at least 12 characters on ${env.NODE_ENV}.`,
+      );
+    }
+  }
+}
+
 async function main(): Promise<void> {
+  assertSafeSeedPasswords();
   console.log('› Seeding KodeCupid…\n');
 
   await seedRegions();
@@ -497,18 +525,11 @@ async function main(): Promise<void> {
   console.log(`✓ Admins: ${adminCount}`);
   console.log(`✓ Members: ${memberCount} (${memberIds.length} sample profiles seeded)`);
   console.log(`✓ Regions: ${regionCount} (${REGIONS.map((region) => region.name).join(', ')})`);
-  console.log('\nAdmin logins');
-  console.log('┌──────────────┬──────────────────────────────┬──────────────────┐');
-  console.log('│ Role         │ Email                        │ Password         │');
-  console.log('├──────────────┼──────────────────────────────┼──────────────────┤');
-  console.log(
-    `│ Super Admin  │ ${env.SEED_ADMIN_EMAIL.padEnd(28)} │ ${env.SEED_ADMIN_PASSWORD.padEnd(16)} │`,
-  );
-  console.log(
-    `│ Moderator    │ ${env.SEED_MODERATOR_EMAIL.padEnd(28)} │ ${env.SEED_MODERATOR_PASSWORD.padEnd(16)} │`,
-  );
-  console.log('└──────────────┴──────────────────────────────┴──────────────────┘');
-  console.log('\nMember phone numbers (OTP works with the debug code in development):');
+  // Passwords are never printed: logs on hosted platforms are retained and shared.
+  console.log('\nAdmin logins (passwords come from SEED_ADMIN_PASSWORD / SEED_MODERATOR_PASSWORD)');
+  console.log(`  Super Admin  ${env.SEED_ADMIN_EMAIL}`);
+  console.log(`  Moderator    ${env.SEED_MODERATOR_EMAIL}`);
+  console.log('\nSample member numbers (on staging, list these in OTP_DEBUG_PHONES to sign in with the debug code):');
   for (const member of MEMBERS) {
     console.log(
       `  ${member.phone}  ${member.displayName}${member.paused ? '  [paused]' : ''}`,

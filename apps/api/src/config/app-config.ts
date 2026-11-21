@@ -54,6 +54,20 @@ const envSchema = z
     SMS_SENDER_NAME: z.string().default('KodeCupid'),
     OTP_DEBUG_CODE: z.string().regex(/^\d{6}$/).default('246810'),
     OTP_ALLOW_DEBUG_CODE: bool(true),
+    /**
+     * Outside development/test the debug code is accepted ONLY for these
+     * numbers (comma-separated E.164), e.g. the seeded sample members. Every
+     * other number must pass a real SMS code. Empty = debug code works nowhere.
+     */
+    OTP_DEBUG_PHONES: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((phone) => phone.trim())
+          .filter(Boolean),
+      ),
     TWILIO_ACCOUNT_SID: optionalString,
     TWILIO_AUTH_TOKEN: optionalString,
     TWILIO_FROM_NUMBER: optionalString,
@@ -87,11 +101,19 @@ const envSchema = z
         message: 'The debug OTP code must be disabled in production',
       });
     }
+    if (value.NODE_ENV === 'production' && value.SMS_PROVIDER !== 'twilio') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMS_PROVIDER'],
+        message: 'Production must send real SMS (SMS_PROVIDER=twilio)',
+      });
+    }
     if (value.SMS_PROVIDER === 'twilio') {
+      // Twilio Verify needs a service SID; raw Twilio Messages needs a sender.
       const required: (keyof typeof value)[] = [
         'TWILIO_ACCOUNT_SID',
         'TWILIO_AUTH_TOKEN',
-        'TWILIO_FROM_NUMBER',
+        value.TWILIO_VERIFY_SERVICE_SID ? 'TWILIO_VERIFY_SERVICE_SID' : 'TWILIO_FROM_NUMBER',
       ];
       for (const key of required) {
         if (!value[key]) {

@@ -9,17 +9,19 @@ PostGIS**.
 
 ---
 
-## 1. Database
+## 1. Database (Neon PostgreSQL 16 + PostGIS)
 
-1. Create a PostgreSQL 16 database on Supabase or Neon.
-2. Copy the connection string. If the provider offers a pooled and a direct URL, use the **direct**
-   URL for migrations and the pooled URL for the API, or simply use the direct URL for both in
-   Milestone 1.
-3. Ensure `DATABASE_URL` has `?schema=public`.
+1. Create a Neon project on **PostgreSQL 16**.
+2. Copy both connection strings from the Neon dashboard (each must end with `sslmode=require`):
+   - **Pooled** (host contains `-pooler`) → `DATABASE_URL` — used by the running API.
+   - **Direct** → `DATABASE_URL_UNPOOLED` — used only by the Prisma CLI (migrations) and the seed
+     script. Poolers break DDL and advisory locks, so migrations must never use the pooled URL.
+3. Migrations enable PostGIS automatically (the first migration runs
+   `CREATE EXTENSION IF NOT EXISTS postgis`). Verify with `SELECT postgis_full_version();` or
+   `GET /api/v1/health`, which reports `"postgis": "enabled"`.
 
-Migrations run the PostGIS setup automatically (`prisma/migrations/*_init` starts with
-`CREATE EXTENSION IF NOT EXISTS postgis`). If the provider blocks the extension, the migration
-fails loudly instead of creating a database without geographic support.
+Moving to AWS RDS PostgreSQL later only changes these two variables (RDS supports PostGIS; with
+no pooler in front, set both to the same URL).
 
 ## 2. Environment variables
 
@@ -27,10 +29,11 @@ fails loudly instead of creating a database without geographic support.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `NODE_ENV` | yes | `staging` on the client-test service (allows the debug OTP), `production` for a real launch (debug OTP refused at boot) |
+| `NODE_ENV` | yes | `staging` on the client-test service, `production` for a real launch (debug OTP and the console SMS provider are refused at boot) |
 | `PORT` | no | defaults to `4000` |
 | `API_PREFIX` | no | defaults to `api/v1` |
-| `DATABASE_URL` | yes | PostgreSQL + PostGIS connection string |
+| `DATABASE_URL` | yes | Neon **pooled** URL (`sslmode=require`), used by the API |
+| `DATABASE_URL_UNPOOLED` | yes (Neon) | Neon **direct** URL, used by migrations + seed |
 | `PUBLIC_API_URL` | yes | e.g. `https://kodecupid-api.onrender.com` — used for photo URLs |
 | `CORS_ORIGINS` | yes | comma-separated web origins |
 | `JWT_ACCESS_SECRET` | yes | 32+ chars; generate two different random values |
@@ -38,13 +41,15 @@ fails loudly instead of creating a database without geographic support.
 | `JWT_ACCESS_TTL` | no | default `15m` |
 | `JWT_REFRESH_TTL_DAYS` | no | default `30` |
 | `COOKIE_SECURE` | yes (prod) | `true` behind HTTPS |
-| `SMS_PROVIDER` | yes | `console` or `twilio` |
-| `OTP_DEBUG_CODE` | staging | fixed code for client testing |
+| `SMS_PROVIDER` | yes | `twilio` on staging/production (`console` is for local development only) |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | if Twilio | from the Twilio console |
+| `TWILIO_VERIFY_SERVICE_SID` | recommended | Twilio Verify service (`VA…`). Without it, set `TWILIO_FROM_NUMBER` to send raw SMS instead |
 | `OTP_ALLOW_DEBUG_CODE` | staging | must be `false` in production (the API refuses to boot otherwise) |
-| `TWILIO_*` | if Twilio | account SID, auth token, from-number |
+| `OTP_DEBUG_CODE` | staging | 6-digit test code; share it privately with the client |
+| `OTP_DEBUG_PHONES` | staging | comma-separated E.164 numbers that may use the debug code (the seeded sample members). Every other number needs the real SMS code. Never returned by the API outside development |
 | `STORAGE_DRIVER` | yes | `local` (needs a volume) or `s3` |
-| `TERMS_VERSION` / `GUIDELINES_VERSION` / `PRIVACY_VERSION` | yes | bump to force re-acceptance |
-| `SEED_*` | once | credentials used by `db:seed` |
+| `TERMS_VERSION` / `GUIDELINES_VERSION` / `SAFETY_TIPS_VERSION` / `PRIVACY_VERSION` | yes | bump to force re-acceptance |
+| `SEED_*` | once | admin emails/passwords used by `db:seed`. On staging/production the seed refuses the development defaults and passwords under 12 characters. Re-running the seed never overwrites an admin's changed role or password (set `SEED_RESET_ADMIN_PASSWORDS=true` to force) |
 
 ### Web (`apps/web`)
 
@@ -59,7 +64,7 @@ The browser never talks to the API host directly: `next.config.ts` rewrites `/ap
 ## 3. Migrations and seed
 
 ```bash
-# locally, with DATABASE_URL exported
+# with DATABASE_URL (pooled) and DATABASE_URL_UNPOOLED (direct) exported
 pnpm --filter @kodecupid/shared build
 pnpm --filter api exec prisma generate
 pnpm --filter api db:deploy     # prisma migrate deploy
@@ -80,10 +85,14 @@ pnpm --filter api db:deploy
 
 1. Push the repository to GitHub.
 2. In Render: **New → Blueprint**, select the repository. `render.yaml` creates the Docker service.
-3. Fill the `sync: false` variables: `DATABASE_URL`, `PUBLIC_API_URL` (the Render URL),
-   `CORS_ORIGINS` (the Vercel URL), and the four `SEED_*` values.
-4. Deploy. Health check: `GET https://<service>/api/v1/health`.
-5. Run migrations + seed once from your machine against the staging `DATABASE_URL`.
+3. Fill the `sync: false` variables: `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `PUBLIC_API_URL`
+   (the Render URL), `CORS_ORIGINS` (the Vercel URL), the three `TWILIO_*` values,
+   `OTP_DEBUG_CODE`, and the four `SEED_*` values.
+4. Deploy. Pending migrations run automatically before the new version starts
+   (`preDeployCommand`). Health check: `GET https://<service>/api/v1/health` must return
+   `"database": "connected", "postgis": "enabled"`.
+5. Seed once (from the Render shell, or locally with the staging URLs exported):
+   `pnpm --filter api db:seed`.
 6. Keep the `kodecupid-storage` disk attached (1 GB) — photos are stored on it under the `local`
    driver.
 
@@ -104,8 +113,9 @@ Railway alternative: create a service from the repository with
 
 ## 6. Post-deploy smoke checklist
 
-- [ ] `GET /api/v1/health` and `/api/v1/health/db` return `ok`
-- [ ] Registration with a test number returns a challenge and the debug code banner appears
+- [ ] `GET /api/v1/health` returns `status: ok`, `database: connected`, `postgis: enabled`
+- [ ] A real phone number receives an SMS code and can verify it
+- [ ] A seeded test number signs in with the private debug code; a real number cannot use it
 - [ ] Verify → compliance → onboarding → member home works on a phone-sized viewport
 - [ ] A hidden field is missing from the member-facing profile response
 - [ ] Pausing the profile hides it from other members
@@ -122,4 +132,5 @@ Railway alternative: create a service from the repository with
 | Browser is redirected to `/login` right after signing in | `COOKIE_SECURE=true` on a non-HTTPS origin, or `API_PROXY_TARGET` is wrong |
 | `401` on every API call after a redeploy | JWT secrets changed; all sessions are invalidated by design |
 | Uploaded photos disappear after a deploy | no persistent disk attached while `STORAGE_DRIVER=local` |
-| Real SMS not arriving | `SMS_PROVIDER=twilio` plus all three Twilio variables, and the sender must be verified |
+| Real SMS not arriving | `SMS_PROVIDER=twilio`, account SID + auth token, and either `TWILIO_VERIFY_SERVICE_SID` or a verified `TWILIO_FROM_NUMBER`. Twilio trial accounts only text numbers verified in the Twilio console |
+| `GET /health` returns 503 | the JSON body says which part failed: `database: disconnected` (check `DATABASE_URL`/`sslmode=require`) or `postgis: missing` (run migrations) |

@@ -1,6 +1,11 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /** Stable hash for high-entropy values (OTP codes, refresh tokens, invite tokens). */
+/** Keyed hash for short secrets (OTP codes): unguessable without the key. */
+export function hmacSha256(value: string, key: string): string {
+  return createHmac('sha256', key).update(value).digest('hex');
+}
+
 export function sha256(value: string, pepper = ''): string {
   return createHash('sha256').update(`${value}${pepper}`).digest('hex');
 }

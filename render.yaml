@@ -1,8 +1,9 @@
 # Render blueprint for the KodeCupid API.
 #
-# IMPORTANT: Render's managed PostgreSQL does not ship PostGIS. Create the
-# database on Supabase or Neon (both support `CREATE EXTENSION postgis`) and paste
-# its connection string into DATABASE_URL.
+# IMPORTANT: Render's managed PostgreSQL does not ship PostGIS. Milestone 1 uses
+# Neon (PostgreSQL 16 + PostGIS). Paste Neon's *pooled* URL into DATABASE_URL and
+# the *direct* URL into DATABASE_URL_UNPOOLED; both need `sslmode=require`.
+# Migrations run automatically before each deploy (preDeployCommand).
 services:
   - type: web
     name: kodecupid-api
@@ -12,10 +13,12 @@ services:
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: .
     healthCheckPath: /api/v1/health
+    # Applies pending migrations over the direct (unpooled) connection.
+    preDeployCommand: pnpm exec prisma migrate deploy
     autoDeploy: true
     envVars:
-      # Staging: behaves like production for cookies/CORS, but still allows the
-      # debug OTP so the client can test without SMS credits. Switch to
+      # Staging: behaves like production for cookies/CORS. Real numbers get real
+      # SMS; only the allow-listed seeded numbers accept the debug code. Switch to
       # `production` (and set OTP_ALLOW_DEBUG_CODE=false) for a real launch.
       - key: NODE_ENV
         value: staging
@@ -24,6 +27,8 @@ services:
       - key: API_PREFIX
         value: api/v1
       - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
         sync: false
       - key: PUBLIC_API_URL
         sync: false
@@ -39,12 +44,24 @@ services:
         value: 30
       - key: COOKIE_SECURE
         value: true
+      # Real SMS via Twilio Verify. Fill the three TWILIO_* values in the dashboard.
       - key: SMS_PROVIDER
-        value: console
+        value: twilio
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_VERIFY_SERVICE_SID
+        sync: false
+      # The debug code works ONLY for the fictional seeded numbers listed in
+      # OTP_DEBUG_PHONES; every real number must pass a real SMS code. The code
+      # itself is set in the dashboard and shared privately with the client.
       - key: OTP_ALLOW_DEBUG_CODE
         value: true
       - key: OTP_DEBUG_CODE
-        value: 246810
+        sync: false
+      - key: OTP_DEBUG_PHONES
+        value: "+8801711000001,+14155550101,+14155550102,+14155550103,+14155550104"
       - key: TERMS_VERSION
         value: "1.0"
       - key: GUIDELINES_VERSION

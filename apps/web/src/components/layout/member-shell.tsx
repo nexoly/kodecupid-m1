@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 import { useSession } from '@/app/providers';
+import { routeAfterAuth } from '@/lib/routing';
 import { Logo } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
 
@@ -21,9 +23,22 @@ const NAV = [
 ];
 
 export function MemberShell({ children }: { children: React.ReactNode }) {
-  const { member, logout } = useSession();
+  const { member, loading, logout } = useSession();
   const pathname = usePathname();
   const router = useRouter();
+
+  // Members who have not accepted the terms or finished onboarding are sent
+  // back to where they left off (the API enforces compliance independently).
+  const gated = !!member && (member.compliance.required || !member.onboarding.completed);
+  useEffect(() => {
+    if (!loading && member && gated) {
+      routeAfterAuth(member, router);
+    }
+  }, [gated, loading, member, router]);
+
+  if (gated) {
+    return <div className="min-h-dvh bg-alabaster" aria-busy="true" />;
+  }
 
   const displayName = member?.user.displayName ?? 'Your profile';
 
