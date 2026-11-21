@@ -152,15 +152,22 @@ export class OnboardingService {
         });
     }
 
-    const progress = await this.ensureProgress(userId);
-    const completed = Array.from(
-      new Set([...(progress.completedSteps as OnboardingStep[]), step]),
-    ) as OnboardingStep[];
-    const nextStep = nextIncompleteStep(completed);
-
-    await this.prisma.onboardingProgress.update({
-      where: { userId },
-      data: { completedSteps: completed, currentStep: nextStep },
+    // Lock this member's progress row while merging, so concurrent saves
+    // (double submit, two tabs) each add their step instead of overwriting
+    // the array from a stale snapshot.
+    await this.ensureProgress(userId);
+    const nextStep = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "onboarding_progress" WHERE "userId" = ${userId} FOR UPDATE`;
+      const locked = await tx.onboardingProgress.findUniqueOrThrow({ where: { userId } });
+      const completed = Array.from(
+        new Set([...(locked.completedSteps as OnboardingStep[]), step]),
+      ) as OnboardingStep[];
+      const next = nextIncompleteStep(completed);
+      await tx.onboardingProgress.update({
+        where: { userId },
+        data: { completedSteps: completed, currentStep: next },
+      });
+      return next;
     });
 
     return {

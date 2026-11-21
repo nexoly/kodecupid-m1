@@ -79,7 +79,12 @@ needs the client's account credentials):
 | 5 | Low | Service Gold used outside verification (warnings, role badge, M2 badges, main-photo label, landing card). | Gold kept for the verification feature only; warnings use a separate caution colour. |
 | 6 | Low | Touch targets under 44px (small buttons 36px, switches 24px, chips ~36px). | 44px on phones. |
 | 7 | Low | Admin header logo rendered on a grey box; role badge invisible on navy. | Dark-background logo variant and a visible role pill. |
-| 8 | Test gap | No unit tests for phone validation or OTP hashing/expiry; no browser test of the full "assign by email → moderator signs in" chain. | Added (43 unit, 47 API, 9 browser tests). |
+| 8 | Test gap | No unit tests for phone validation or OTP hashing/expiry; no browser test of the full "assign by email → moderator signs in" chain. | Added. |
+| 9 | Medium | Review: concurrent refreshes of one token could all succeed and create several sessions (member and admin). | Old session claimed atomically in the same transaction as its replacement; a lost race returns 401 with `refreshRace`, a logout-revoked token stays terminal. Member side by CodeRabbit autofix (3865c15); admin side added here, with a test that fails without it. |
+| 10 | Medium | Review: a tab losing the refresh race failed its request; logout during a refresh left a session alive. | Bounded retries on `refreshRace`; logout waits for in-flight refreshes and blocks new ones (3865c15). |
+| 11 | Low | Review: privacy toggles could be overwritten by an older response; concurrent onboarding saves could drop a step. | Privacy switches are disabled while one saves (3865c15); onboarding progress row locked while merging (added here). |
+
+Totals after this pass: 43 unit, 50 API, 10 browser tests.
 
 ## Verification commands
 

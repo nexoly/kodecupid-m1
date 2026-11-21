@@ -280,6 +280,39 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
       expect(state.body.nextStep).toBe('complete');
     });
 
+    it('keeps every step when steps are saved concurrently', async () => {
+      const progress = await prisma.onboardingProgress.findFirstOrThrow({
+        where: { user: { phoneE164: phone } },
+      });
+      await prisma.onboardingProgress.update({
+        where: { id: progress.id },
+        data: { completedSteps: ['welcome', 'identity'] },
+      });
+
+      await Promise.all([
+        agent.patch(`${prefix}/onboarding/step`).send({
+          step: 'profession',
+          data: { profession: 'Registered Nurse', professionCategory: 'HEALTHCARE', shiftSchedule: 'NIGHT' },
+        }),
+        agent.patch(`${prefix}/onboarding/step`).send({
+          step: 'identity',
+          data: { displayName: 'Test Member', dateOfBirth: '1995-05-05', genderIdentity: 'WOMAN', interestedIn: ['MEN'] },
+        }),
+        agent.patch(`${prefix}/onboarding/step`).send({ step: 'welcome', data: {} }),
+      ]);
+
+      const after = await prisma.onboardingProgress.findUniqueOrThrow({ where: { id: progress.id } });
+      expect(after.completedSteps).toEqual(expect.arrayContaining(['welcome', 'identity', 'profession']));
+
+      for (const [step, data] of [
+        ['location', { city: 'Atlanta', region: 'Georgia', country: 'US' }],
+        ['preferences', { lookingFor: ['LONG_TERM'], ageRangeMin: 25, ageRangeMax: 40, maxDistanceKm: 30 }],
+        ['privacy', { visibility: [{ field: 'RELIGION', visibility: 'HIDDEN' }] }],
+      ] as const) {
+        await agent.patch(`${prefix}/onboarding/step`).send({ step, data }).expect(200);
+      }
+    });
+
     it('refuses to complete the profile without at least one photo', async () => {
       const response = await agent.post(`${prefix}/onboarding/complete`).expect(403);
       expect(response.body.error.code).toBe('PHOTO_REQUIRED');
@@ -423,6 +456,21 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
         .post(`${prefix}/auth/refresh`)
         .set('Cookie', `kc_rt=${refresh}`)
         .expect(401);
+    });
+
+    it('lets exactly one of several truly concurrent refreshes win', async () => {
+      const { refresh, userId } = await signIn();
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          request(httpServer).post(`${prefix}/auth/refresh`).set('Cookie', `kc_rt=${refresh}`),
+        ),
+      );
+      expect(results.filter((result) => result.status === 200)).toHaveLength(1);
+      for (const loser of results.filter((result) => result.status !== 200)) {
+        expect(loser.status).toBe(401);
+        expect(loser.body.error.details).toEqual({ refreshRace: true });
+      }
+      expect(await prisma.session.count({ where: { userId, revokedAt: null } })).toBe(1);
     });
 
     it('treats two simultaneous refreshes (two tabs) as a race, not as theft', async () => {
@@ -695,6 +743,38 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
       expect(statuses[5]).toBe(429);
 
       app.get(RateLimiterService).clear();
+    });
+
+    it('lets exactly one of several concurrent admin refreshes win', async () => {
+      const login = await request(httpServer)
+        .post(`${prefix}/admin/auth/login`)
+        .send({
+          email: process.env.SEED_MODERATOR_EMAIL ?? 'moderator@kodecupid.test',
+          password: process.env.SEED_MODERATOR_PASSWORD ?? 'ChangeMe!Mod1',
+        })
+        .expect(200);
+      const refresh = (login.headers['set-cookie'] as unknown as string[])
+        .find((cookie) => cookie.startsWith('kc_admin_rt='))!
+        .split(';')[0]!
+        .slice('kc_admin_rt='.length);
+      const sessionId = refresh.split('.')[0]!;
+
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          request(httpServer)
+            .post(`${prefix}/admin/auth/refresh`)
+            .set('Cookie', `kc_admin_rt=${refresh}`),
+        ),
+      );
+      expect(results.filter((result) => result.status === 200)).toHaveLength(1);
+      for (const loser of results.filter((result) => result.status !== 200)) {
+        expect(loser.status).toBe(401);
+        expect(loser.body.error.details).toEqual({ refreshRace: true });
+      }
+      // The old session was replaced by exactly one new session.
+      expect(await prisma.adminSession.count({ where: { replacedById: { not: null }, id: sessionId } })).toBe(1);
+      const replacedBy = (await prisma.adminSession.findUniqueOrThrow({ where: { id: sessionId } })).replacedById!;
+      expect(await prisma.adminSession.count({ where: { id: replacedBy, revokedAt: null } })).toBe(1);
     });
 
     it('gives the Moderator the member list with masked phone numbers', async () => {

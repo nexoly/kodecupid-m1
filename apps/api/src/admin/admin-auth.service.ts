@@ -149,20 +149,44 @@ export class AdminAuthService {
     const admin = await this.prisma.adminUser.findUnique({ where: { id: session!.adminId } });
     if (!admin || admin.status === 'DISABLED') this.tokens.invalidSession();
 
+    // Claim the old session and create its replacement atomically, as in
+    // AuthService.rotate: concurrent refreshes of one token yield one session.
     const { secret, hash } = this.tokens.newRefreshSecret();
-    const replacement = await this.prisma.adminSession.create({
-      data: {
-        adminId: admin!.id,
-        tokenHash: hash,
-        expiresAt: this.tokens.refreshExpiryDate(),
-        ip: meta.ip,
-        userAgent: meta.userAgent,
-      },
+    const replacement = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.adminSession.updateMany({
+        where: { id: session!.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      if (claimed.count === 0) return null;
+
+      const next = await tx.adminSession.create({
+        data: {
+          adminId: admin!.id,
+          tokenHash: hash,
+          expiresAt: this.tokens.refreshExpiryDate(),
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+        },
+      });
+      await tx.adminSession.update({
+        where: { id: session!.id },
+        data: { replacedById: next.id },
+      });
+      return next;
     });
-    await this.prisma.adminSession.update({
-      where: { id: session!.id },
-      data: { revokedAt: new Date(), replacedById: replacement.id },
-    });
+
+    if (!replacement) {
+      // Lost to a concurrent refresh (recoverable), or revoked by a logout.
+      const previous = await this.prisma.adminSession.findUnique({ where: { id: session!.id } });
+      if (
+        previous?.replacedById &&
+        previous.revokedAt &&
+        Date.now() - previous.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS
+      ) {
+        this.tokens.refreshRace();
+      }
+      this.tokens.invalidSession();
+    }
 
     const accessToken = await this.tokens.signAdminAccess(admin!.id);
     return {

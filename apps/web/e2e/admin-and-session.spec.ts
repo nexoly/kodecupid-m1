@@ -166,6 +166,59 @@ test('member session survives access-token expiry and the brief route names work
   await page.getByRole('switch', { name: /Profile paused/ }).click();
   await expect(page.getByText('Your profile is visible again.')).toBeVisible();
   expect((await page.request.get(`/api/v1/profiles/${me.id}`)).status()).toBe(200);
+
+  // Two quick changes in a row: both must stick (no stale response wins).
+  const before = (await (await page.request.get('/api/v1/profile/me')).json()).visibility;
+  await page.getByRole('switch', { name: 'Languages' }).click();
+  await page.getByRole('switch', { name: 'Height' }).click();
+  const flip = (value: string) => (value === 'PUBLIC' ? 'HIDDEN' : 'PUBLIC');
+  await expect
+    .poll(async () => (await (await page.request.get('/api/v1/profile/me')).json()).visibility)
+    .toMatchObject({ LANGUAGES: flip(before.LANGUAGES), HEIGHT: flip(before.HEIGHT) });
+  for (const [name, was] of [['Languages', before.LANGUAGES], ['Height', before.HEIGHT]]) {
+    await expect(page.getByRole('switch', { name })).toHaveAttribute(
+      'aria-checked',
+      was === 'PUBLIC' ? 'false' : 'true',
+    );
+  }
+  // Put them back for the next run.
+  await page.getByRole('switch', { name: 'Languages' }).click();
+  await page.getByRole('switch', { name: 'Height' }).click();
+  await expect(page.getByRole('switch', { name: 'Height' })).toHaveAttribute(
+    'aria-checked',
+    before.HEIGHT === 'PUBLIC' ? 'true' : 'false',
+  );
+});
+
+test('two tabs refreshing an expired session at the same moment both keep working', async ({
+  page,
+  context,
+}) => {
+  await page.goto('/login');
+  await page.getByLabel('Country').selectOption('US');
+  await page.getByLabel('Phone number').fill('4155550102'); // Sofia (seeded)
+  await page.getByRole('button', { name: /Send (my|sign-in) code/ }).click();
+  await page.getByLabel('Verification code').fill(DEBUG_CODE);
+  await page.getByRole('button', { name: 'Verify and continue' }).click();
+  await expect(page).toHaveURL(/\/app/);
+
+  const second = await context.newPage();
+  await second.goto('/settings');
+  await expect(second.getByRole('heading', { name: 'Settings' })).toBeVisible();
+
+  // Access token expires; both tabs reload at once and race to refresh.
+  await context.clearCookies({ name: 'kc_at' });
+  await Promise.all([page.goto('/profile'), second.goto('/profile/privacy')]);
+  await expect(page.getByRole('heading', { name: /Sofia/ })).toBeVisible();
+  await expect(second.getByRole('heading', { name: 'Privacy controls' })).toBeVisible();
+  await expect(page).toHaveURL(/\/profile$/);
+  await expect(second).toHaveURL(/\/profile\/privacy$/);
+
+  // Logging out afterwards ends the session for every tab.
+  await page.getByRole('banner').getByRole('button', { name: 'Sign out' }).click();
+  await expect(page).toHaveURL(/\/login/);
+  await second.goto('/profile');
+  await expect(second).toHaveURL(/\/login/);
 });
 
 test('admin session survives access-token expiry', async ({ page, context }) => {
