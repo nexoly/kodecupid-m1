@@ -23,7 +23,8 @@ export class ApiError extends Error {
   }
 }
 
-type Audience = 'member' | 'admin' | 'none';
+type SessionAudience = 'member' | 'admin';
+type Audience = SessionAudience | 'none';
 
 export interface ApiFetchOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -47,15 +48,25 @@ function isAuthEndpoint(path: string): boolean {
  * One refresh in flight per audience: concurrent 401s share it, so a page that
  * fires several requests at once rotates the refresh token exactly once.
  */
-const refreshing: Partial<Record<'member' | 'admin', Promise<boolean>>> = {};
+type RefreshResult = 'refreshed' | 'race' | 'failed';
+const refreshing: Partial<Record<SessionAudience, Promise<RefreshResult>>> = {};
+const loggingOut: Partial<Record<SessionAudience, Promise<Response>>> = {};
 
-function refreshSession(audience: 'member' | 'admin'): Promise<boolean> {
+function refreshSession(audience: SessionAudience): Promise<RefreshResult> {
   const existing = refreshing[audience];
   if (existing) return existing;
   const endpoint = audience === 'admin' ? '/api/v1/admin/auth/refresh' : '/api/v1/auth/refresh';
   const attempt = fetch(endpoint, { method: 'POST', credentials: 'same-origin' })
-    .then((response) => response.ok)
-    .catch(() => false)
+    .then(async (response): Promise<RefreshResult> => {
+      if (response.ok) return 'refreshed';
+      if (response.status === 401) {
+        const body = (await response.json()) as ApiErrorBody | null;
+        const details = body?.error?.details as { refreshRace?: boolean } | undefined;
+        if (details?.refreshRace === true) return 'race';
+      }
+      return 'failed';
+    })
+    .catch(() => 'failed' as const)
     .finally(() => {
       delete refreshing[audience];
     });
@@ -63,17 +74,47 @@ function refreshSession(audience: 'member' | 'admin'): Promise<boolean> {
   return attempt;
 }
 
+function sendLogout(audience: SessionAudience, url: string, init: RequestInit): Promise<Response> {
+  // Wait for Set-Cookie from any pending refresh before sending the logout cookie.
+  // Mark logout as pending so a concurrent 401 cannot start a new rotation.
+  const existing = loggingOut[audience];
+  if (existing) return existing.then((response) => response.clone());
+  const logout = Promise.all([refreshing.member, refreshing[audience]])
+    .then(() => fetch(url, init))
+    .finally(() => {
+      delete loggingOut[audience];
+    });
+  loggingOut[audience] = logout;
+  return logout.then((response) => response.clone());
+}
+
 /**
- * Sends a request; on 401 it refreshes the 15-minute access token once using
- * the 30-day refresh cookie and retries, so sessions do not end mid-use.
+ * Sends a protected request, refreshing the access cookie at most once on 401.
  */
 async function sendWithRefresh(path: string, init: RequestInit): Promise<Response> {
-  const response = await fetch(`/api/v1${path}`, init);
-  if (response.status !== 401 || isAuthEndpoint(path)) return response;
-
+  const url = `/api/v1${path}`;
   const audience = path.startsWith('/admin/') ? 'admin' : 'member';
-  const refreshed = await refreshSession(audience);
-  return refreshed ? fetch(`/api/v1${path}`, init) : response;
+  if (init.method === 'POST' && (path === '/auth/logout' || path === '/admin/auth/logout')) {
+    return sendLogout(audience, url, init);
+  }
+
+  const response = await fetch(url, init);
+  if (response.status !== 401 || isAuthEndpoint(path) || loggingOut[audience]) return response;
+
+  const result = await refreshSession(audience);
+  if (loggingOut[audience]) return response;
+  if (result === 'refreshed') return fetch(url, init);
+  if (result === 'race') {
+    // The winning tab may still be receiving its cookies. Retry only the
+    // protected request so we cannot replay a stale refresh token again.
+    for (const delay of [100, 250, 500]) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (loggingOut[audience] || init.signal?.aborted) break;
+      const retry = await fetch(url, init);
+      if (retry.status !== 401) return retry;
+    }
+  }
+  return response;
 }
 
 /**

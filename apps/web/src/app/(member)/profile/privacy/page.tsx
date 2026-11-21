@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   PROFILE_FIELD_LABELS,
@@ -53,6 +53,9 @@ export default function PrivacyPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pausing, setPausing] = useState(false);
+  // Both mutations return a full profile snapshot, so only one can run at a time.
+  const saving = useRef(false);
+  const controlsDisabled = pausing || savingField !== null;
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +75,8 @@ export default function PrivacyPage() {
   }, []);
 
   async function setVisibility(field: ProfileField, makePublic: boolean): Promise<void> {
+    if (saving.current) return;
+    saving.current = true;
     setSavingField(field);
     setError(null);
     setNotice(null);
@@ -85,11 +90,14 @@ export default function PrivacyPage() {
     } catch (caught) {
       setError(errorMessage(caught, 'Could not change that setting.'));
     } finally {
+      saving.current = false;
       setSavingField(null);
     }
   }
 
   async function setPaused(nextPaused: boolean): Promise<void> {
+    if (saving.current) return;
+    saving.current = true;
     setPausing(true);
     setError(null);
     setNotice(null);
@@ -107,6 +115,7 @@ export default function PrivacyPage() {
     } catch (caught) {
       setError(errorMessage(caught, 'Could not update your profile status.'));
     } finally {
+      saving.current = false;
       setPausing(false);
     }
   }
@@ -144,7 +153,7 @@ export default function PrivacyPage() {
           <ToggleRow
             id="pause-profile"
             checked={profile.status !== 'PAUSED'}
-            disabled={pausing}
+            disabled={controlsDisabled}
             onChange={(visible) => void setPaused(!visible)}
             title={profile.status === 'PAUSED' ? 'Profile paused' : 'Profile visible'}
             description={
@@ -189,7 +198,7 @@ export default function PrivacyPage() {
                   key={field}
                   id={`visibility-${field}`}
                   checked={visible}
-                  disabled={savingField === field}
+                  disabled={controlsDisabled}
                   onChange={(value) => void setVisibility(field, value)}
                   title={PROFILE_FIELD_LABELS[field]}
                   description={

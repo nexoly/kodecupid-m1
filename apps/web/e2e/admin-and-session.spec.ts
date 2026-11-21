@@ -107,7 +107,7 @@ test('admin chain: assign by email → moderator signs in → permissions → re
   await row.last().getByRole('button', { name: 'Revoke' }).click();
   await expect
     .poll(async () => (await invitee.request.get('/api/v1/admin/users')).status())
-    .not.toBe(200);
+    .toBe(403);
 
   // Every change is in the audit log
   const audit = (await (await page.request.get('/api/v1/admin/audit-logs')).json()) as {
@@ -126,7 +126,12 @@ test('member session survives access-token expiry and the brief route names work
 }) => {
   // /verify-otp maps onto the OTP screen
   await page.goto('/verify-otp');
-  await expect(page).toHaveURL(/\/(verify|register|login)/);
+  await expect(page).toHaveURL((url) => /^\/(verify|register|login)$/.test(url.pathname));
+  await expect(
+    page.getByRole('heading', {
+      name: /^(No code to check|Enter your code|Create your account|Welcome back)$/,
+    }),
+  ).toBeVisible();
 
   await page.goto('/login');
   await page.getByLabel('Country').selectOption('US');

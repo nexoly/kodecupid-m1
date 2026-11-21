@@ -128,6 +128,9 @@ export class AdminAuthService {
         session!.replacedById &&
         Date.now() - session!.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS
       ) {
+        if (safeEqual(this.tokens.hashRefresh(parts!.secret), session!.tokenHash)) {
+          this.tokens.refreshRace();
+        }
         this.tokens.invalidSession();
       }
       await this.prisma.adminSession.updateMany({

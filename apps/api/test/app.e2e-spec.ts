@@ -427,17 +427,21 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
 
     it('treats two simultaneous refreshes (two tabs) as a race, not as theft', async () => {
       const { refresh, userId } = await signIn();
-      const winner = await request(httpServer)
-        .post(`${prefix}/auth/refresh`)
-        .set('Cookie', `kc_rt=${refresh}`)
-        .expect(200);
+      const refreshOnce = () =>
+        request(httpServer).post(`${prefix}/auth/refresh`).set('Cookie', `kc_rt=${refresh}`);
+      const results = await Promise.all([refreshOnce(), refreshOnce()]);
+      expect(results.map(({ status }) => status).sort()).toEqual([200, 401]);
+      const winner = results.find(({ status }) => status === 200)!;
+      const loser = results.find(({ status }) => status === 401)!;
+      expect(loser.body.error).toMatchObject({
+        code: 'UNAUTHENTICATED',
+        details: { refreshRace: true },
+      });
       const rotated = cookieValue(winner.headers['set-cookie'] as unknown as string[], 'kc_rt')!;
+      expect(await prisma.session.count({ where: { userId, revokedAt: null } })).toBe(1);
 
-      // The second tab presents the token rotated a moment ago.
-      await request(httpServer)
-        .post(`${prefix}/auth/refresh`)
-        .set('Cookie', `kc_rt=${refresh}`)
-        .expect(401);
+      // A subsequent use of the old token is also rejected within the grace window.
+      await refreshOnce().expect(401);
 
       // The winning tab's session survives.
       await request(httpServer)
@@ -462,10 +466,11 @@ describe('KodeCupid Milestone 1 (e2e)', () => {
         data: { revokedAt: new Date(Date.now() - 5 * 60_000) },
       });
 
-      await request(httpServer)
+      const replay = await request(httpServer)
         .post(`${prefix}/auth/refresh`)
         .set('Cookie', `kc_rt=${refresh}`)
         .expect(401);
+      expect(replay.body.error.details).toBeUndefined();
       const live = await prisma.session.count({ where: { userId, revokedAt: null } });
       expect(live).toBe(0);
     });
