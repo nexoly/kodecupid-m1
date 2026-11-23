@@ -1,7 +1,25 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "builder": "DOCKERFILE",
-    "dockerfilePath": "apps/api/Dockerfile"
+    "builder": "RAILPACK",
+    "buildEnvironment": "V3"
+  },
+  "deploy": {
+    "runtime": "V2",
+    "numReplicas": 1,
+    "healthcheckPath": "/api/v1/health",
+    "preDeployCommand": [
+      "/bin/sh -c \"exec pnpm exec prisma migrate deploy\""
+    ],
+    "sleepApplication": false,
+    "useLegacyStacker": false,
+    "ipv6EgressEnabled": false,
+    "multiRegionConfig": {
+      "iad": {
+        "numReplicas": 1
+      }
+    },
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }
